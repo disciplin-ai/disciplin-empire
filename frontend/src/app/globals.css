@@ -1,0 +1,125 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* --------------------------
+   GLOBAL APP RESET + THEME
+--------------------------- */
+
+:root {
+  --background: #0a0f1c; /* Deep cinematic navy */
+  --foreground: #ffffff;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Inter, system-ui, sans-serif;
+  height: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* Smooth transitions for things like buttons / cards */
+.page-transition {
+  @apply transition-all duration-300 ease-out;
+}
+
+/* --------------------------
+   INPUT SYSTEM
+--------------------------- */
+
+.input {
+  @apply w-full
+    bg-slate-800/40
+    text-white
+    placeholder:text-slate-500
+    px-3 py-2
+    rounded-lg
+    border border-white/10
+    focus:border-emerald-500
+    outline-none
+    transition;
+}
+
+.input:focus {
+  /* subtle green glow */
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.3);
+}
+
+/* --------------------------
+   SELECTS
+--------------------------- */
+
+.select {
+  @apply w-full
+    bg-slate-800/40
+    text-white
+    px-3 py-2
+    rounded-lg
+    border border-white/10
+    focus:border-emerald-500
+    outline-none
+    transition;
+}
+
+/* --------------------------
+   BUTTONS
+--------------------------- */
+
+.btn-primary {
+  @apply bg-emerald-500 text-black
+    px-4 py-2 rounded-lg font-semibold
+    hover:bg-emerald-400
+    transition;
+}
+
+.btn-secondary {
+  @apply bg-transparent border border-white/20
+    px-4 py-2 rounded-lg
+    text-white
+    hover:border-white/40
+    transition;
+}
+
+/* --------------------------
+   SIMPLE FADE-IN UTILITY
+   (no Tailwind @apply here)
+--------------------------- */
+
+.fade-in {
+  opacity: 0;
+  animation: fadeIn 0.25s ease-out forwards;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* --------------------------
+   FORM CARD LAYOUT
+--------------------------- */
+
+.form-card {
+  @apply bg-slate-900/30
+    backdrop-blur-xl
+    rounded-2xl p-8
+    border border-white/5
+    shadow-xl;
+}
+
+.form-section-title {
+  @apply text-lg font-semibold text-white mb-4;
+}
