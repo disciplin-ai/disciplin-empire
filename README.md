@@ -1,6 +1,6 @@
-#  Disciplin Empire: The Core Command
+#  Disciplin : The Core Command
 
-The **Disciplin Empire** is not a company or startup — it is a foundation for a living empire of power, sport, and order.  
+**Disciplin ** is not a company or startup — it is a foundation for a living empire of power, sport, and order.  
 The app you see here is the **Core Command** — the system that governs data, recovery, AI coaching, and discipline across the entire dominion.
 
 What begins as software will expand into **real training facilities, sponsorship networks, and combat legions** — world-class fighters, scientists, and engineers united under one symbol.
@@ -14,7 +14,7 @@ The Core Command manages:
 - **Sensei AI** — the voice of brutal truth, an AI modeled after the uncompromising discipline of combat masters.  
 - **Automation Core** — the future infrastructure for habit tracking, performance loops, and global system control.  
 
-This is the operating system of the Disciplin Empire.  
+This is the operating system of Disciplin .  
 Every fighter. Every coach. Every gym. Every data point.  
 All reporting back to one hub.
 
@@ -33,16 +33,6 @@ The empire is the **tree** — rooted in truth, discipline, and relentless contr
 
 ---
 
-##  Current Stage
-
-> **Phase I: The Core Command**  
-> Status: Under Construction  
-> Objective: Centralize athlete data, AI feedback, and performance tracking.  
-
-Future Phases:
-1. **Phase II – Expansion:** integrate real-world gym networks & athlete onboarding.  
-2. **Phase III – Governance:** deploy empire-wide automation, logistics & training systems.  
-3. **Phase IV – Dominion:** unify physical and digital control under the same AI command core.
 
 ---
 
