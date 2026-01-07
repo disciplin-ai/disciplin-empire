@@ -1,43 +1,39 @@
-// src/app/lib/gymData.ts
+// frontend/src/lib/gymData.ts
 
-export type GymProfile = {
-  id: string;
+export type Gym = {
+  slug: string;
   name: string;
-  city: string;
-  country: string;
-  style: string;       // e.g. "MMA / Combat Sambo"
-  level: string;       // e.g. "Pro / Amateur / Hobby"
-  priceTier: string;   // e.g. "$$", "$$$"
-  description: string;
-  mapsUrl: string;     // Google Maps deep link
+
+  city?: string;
+  country?: string;
+
+  disciplines?: string[];
+  tags?: string[];
+
+  description?: string;
+
+  rating?: number;
+  reviewCount?: number;
+
+  verified?: boolean;
+
+  intensityLabel?: string;
+  intensityColor?: "green" | "amber" | "red";
+
+  photoUrl?: string;
+
+  website?: string;
+  googleMapsUrl?: string;
+
+  reviewScores?: {
+    pace: number;
+    wrestlingRoom: number;
+    strikingPace: number;
+    coachQuality: number;
+    recoveryCulture: number;
+  };
+
+  reviewSummary?: string;
 };
 
-export const gyms: GymProfile[] = [
-  {
-    id: "kuma-sambo-dubai",
-    name: "Kuma Sambo",
-    city: "Dubai",
-    country: "UAE",
-    style: "Combat Sambo / MMA",
-    level: "Amateur–Pro",
-    priceTier: "$$",
-    description:
-      "Hard Sambo-style wrestling and MMA. Pressure sparring, tough rounds, no influencer nonsense.",
-    mapsUrl:
-      "https://www.google.com/maps/search/?api=1&query=Kuma+Sambo+Dubai",
-  },
-  {
-    id: "gor-mma-gori",
-    name: "GOR MMA",
-    city: "Gori",
-    country: "Georgia",
-    style: "MMA / Wrestling",
-    level: "Amateur–Pro",
-    priceTier: "$$",
-    description:
-      "Wrestling-heavy MMA gym with gritty rounds and strong clinch pressure.",
-    mapsUrl:
-      "https://www.google.com/maps/search/?api=1&query=GOR+MMA+Gori+Georgia",
-  },
-  // add more gyms here...
-];
+export const gyms: Gym[] = [];

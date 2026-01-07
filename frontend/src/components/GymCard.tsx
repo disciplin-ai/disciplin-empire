@@ -5,8 +5,12 @@ import React from "react";
 export type Gym = {
   id: string;
   name: string;
-  city: string;
-  country: string;
+
+  // These can be null/undefined from Supabase or your API
+  city?: string | null;
+  country?: string | null;
+  area?: string | null;
+  slug?: string | null;
 
   // optional fields (API may or may not return them)
   address?: string | null;
@@ -31,17 +35,27 @@ function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
+function buildLocation(gym: Gym) {
+  const parts = [gym.area, gym.city, gym.country].filter(
+    (x): x is string => typeof x === "string" && x.trim().length > 0
+  );
+  return parts.length ? parts.join(", ") : "Location unknown";
+}
+
 export default function GymCard({ gym }: { gym: Gym }) {
-  const tags = (gym.style_tags ?? []).slice(0, 4);
+  const tags = (gym.style_tags ?? []).filter(Boolean).slice(0, 4);
+
+  const location = buildLocation(gym);
+  const discipline = (gym.primary_discipline ?? "Mixed").toString();
 
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 shadow-[0_10px_30px_rgba(0,0,0,0.25)]">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold text-white">{gym.name}</h3>
-          <div className="mt-1 text-sm text-white/65">
-            {gym.city}, {gym.country}
-          </div>
+
+          <div className="mt-1 text-sm text-white/65">{location}</div>
+
           {gym.address ? (
             <div className="mt-2 text-xs text-white/45">{gym.address}</div>
           ) : null}
@@ -59,7 +73,7 @@ export default function GymCard({ gym }: { gym: Gym }) {
           )}
 
           <span className="rounded-full border border-white/10 bg-white/[0.02] px-3 py-1 text-xs text-white/70">
-            {(gym.primary_discipline || "Mixed").toString()}
+            {discipline}
           </span>
         </div>
       </div>

@@ -1,8 +1,42 @@
 // frontend/src/app/gyms/page.tsx
 "use client";
 
-import React, { useEffect, useState } from "react";
-import GymCard, { Gym } from "../../components/GymCard";
+import React, { useEffect, useMemo, useState } from "react";
+import GymCard from "../../components/GymCard";
+
+type Gym = {
+  id: string;
+  slug?: string;
+  name: string;
+  city?: string | null;
+  area?: string | null;
+  country?: string | null;
+  address?: string | null;
+  phone?: string | null;
+  website?: string | null;
+
+  // flexible tags + pricing
+  tags?: string[] | null;
+  price?: string | null;
+  notes?: string | null;
+
+  // geo
+  lat?: number | null;
+  lng?: number | null;
+
+  // verification + disciplines
+  verified?: boolean | null;
+  disciplines?: string[] | null;
+
+  // optional extras if your API returns them
+  primary_discipline?: string | null;
+  style_tags?: string[] | null;
+  intensity_label?: string | null;
+  level_label?: string | null;
+  price_label?: string | null;
+  is_verified?: boolean | null;
+  google_maps_url?: string | null;
+};
 
 const DISCIPLINE_FILTERS = [
   "All disciplines",
@@ -13,11 +47,54 @@ const DISCIPLINE_FILTERS = [
   "BJJ",
 ];
 
+function normalizeGym(raw: any): Gym {
+  // Accept multiple shapes from different versions of your API
+  const city = raw.city ?? raw.location?.city ?? null;
+  const country = raw.country ?? raw.location?.country ?? null;
+
+  return {
+    id: String(raw.id ?? raw.slug ?? raw.name ?? crypto.randomUUID()),
+    slug: raw.slug ?? null,
+    name: String(raw.name ?? "Unknown gym"),
+
+    city,
+    area: raw.area ?? raw.location?.area ?? null,
+    country,
+
+    address: raw.address ?? raw.location?.address ?? null,
+    phone: raw.phone ?? null,
+    website: raw.website ?? null,
+
+    tags: Array.isArray(raw.tags) ? raw.tags : null,
+    price: raw.price ?? null,
+    notes: raw.notes ?? null,
+
+    lat: raw.lat ?? raw.latitude ?? null,
+    lng: raw.lng ?? raw.longitude ?? null,
+
+    verified:
+      (typeof raw.verified === "boolean" ? raw.verified : null) ??
+      (typeof raw.is_verified === "boolean" ? raw.is_verified : null),
+
+    disciplines: Array.isArray(raw.disciplines) ? raw.disciplines : null,
+
+    // extras (safe)
+    primary_discipline: raw.primary_discipline ?? null,
+    style_tags: Array.isArray(raw.style_tags) ? raw.style_tags : null,
+    intensity_label: raw.intensity_label ?? null,
+    level_label: raw.level_label ?? null,
+    price_label: raw.price_label ?? null,
+    is_verified: typeof raw.is_verified === "boolean" ? raw.is_verified : null,
+    google_maps_url: raw.google_maps_url ?? null,
+  };
+}
+
 export default function GymsPage() {
-  const [gyms, setGyms] = useState<Gym[]>([]);
+  const [items, setItems] = useState<Gym[]>([]);
   const [query, setQuery] = useState("");
   const [discipline, setDiscipline] = useState<string>("All disciplines");
   const [verifiedOnly, setVerifiedOnly] = useState(false);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,7 +107,6 @@ export default function GymsPage() {
 
       try {
         const params = new URLSearchParams();
-
         if (query.trim()) params.set("q", query.trim());
         if (discipline !== "All disciplines") params.set("discipline", discipline);
         if (verifiedOnly) params.set("verified", "true");
@@ -38,27 +114,38 @@ export default function GymsPage() {
         const res = await fetch(`/api/gyms?${params.toString()}`, {
           cache: "no-store",
         });
+
         const json = await res.json();
 
         if (cancelled) return;
 
-        setGyms(Array.isArray(json.gyms) ? json.gyms : []);
-        if (json.error) setError(json.error);
-      } catch (err: any) {
+        const rawList = Array.isArray(json?.gyms)
+          ? json.gyms
+          : Array.isArray(json)
+          ? json
+          : [];
+
+        setItems(rawList.map(normalizeGym));
+        if (json?.error) setError(String(json.error));
+      } catch (e: any) {
         if (cancelled) return;
-        setError(err?.message ?? "Failed to load gyms");
-        setGyms([]);
+        setError(e?.message ?? "Failed to load gyms");
+        setItems([]);
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
 
     loadGyms();
-
     return () => {
       cancelled = true;
     };
   }, [query, discipline, verifiedOnly]);
+
+  const heading = useMemo(() => {
+    if (discipline === "All disciplines") return "Your training hubs.";
+    return `${discipline} gyms.`;
+  }, [discipline]);
 
   return (
     <main className="min-h-screen bg-[#020810] text-white px-8 py-10">
@@ -68,14 +155,14 @@ export default function GymsPage() {
           <p className="text-[11px] font-semibold tracking-[0.3em] text-emerald-400">
             GYMS
           </p>
-          <h1 className="mt-1 text-3xl font-semibold">Your training hubs.</h1>
+          <h1 className="mt-1 text-3xl font-semibold">{heading}</h1>
           <p className="mt-2 text-sm text-white/60 max-w-2xl">
-            Find real rooms that match your discipline and intensity — no fake
-            placeholders, just the grind spots from your database.
+            Search real rooms by discipline and location. Verified labels are optional
+            and depend on your data.
           </p>
         </div>
 
-        {/* Search + filters box */}
+        {/* Search + filters */}
         <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
           <div className="flex flex-col gap-3 md:flex-row md:items-center">
             <input
@@ -92,7 +179,7 @@ export default function GymsPage() {
                 onChange={(e) => setVerifiedOnly(e.target.checked)}
                 className="h-4 w-4 rounded border-white/20 bg-black/40"
               />
-              Only verified grind rooms
+              Only verified
             </label>
           </div>
 
@@ -102,6 +189,7 @@ export default function GymsPage() {
               return (
                 <button
                   key={d}
+                  type="button"
                   onClick={() => setDiscipline(d)}
                   className={[
                     "rounded-full px-3 py-1 text-xs border transition",
@@ -118,27 +206,26 @@ export default function GymsPage() {
         </div>
 
         {/* States */}
-        {loading && (
-          <div className="text-sm text-white/60">Loading gyms…</div>
-        )}
+        {loading && <div className="text-sm text-white/60">Loading gyms…</div>}
 
         {!loading && error && (
-          <div className="text-sm text-red-400">
-            Something went wrong loading gyms: {error}
+          <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
+            Something went wrong loading gyms:{" "}
+            <span className="font-semibold">{error}</span>
           </div>
         )}
 
-        {!loading && !error && gyms.length === 0 && (
+        {!loading && !error && items.length === 0 && (
           <div className="text-sm text-white/60">
-            No gyms matched your filters. Try clearing the search or widening
-            the radius.
+            No gyms matched your filters. Try clearing the search or changing
+            discipline.
           </div>
         )}
 
-        {/* Gyms grid */}
+        {/* Grid */}
         <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-          {gyms.map((gym) => (
-            <GymCard key={gym.id} gym={gym} />
+          {items.map((gym) => (
+            <GymCard key={gym.id} gym={gym as any} />
           ))}
         </div>
       </div>
