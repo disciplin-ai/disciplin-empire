@@ -1,5 +1,4 @@
-// src/lib/athleteClassifier.ts
-
+// frontend/src/lib/athleteClassifier.ts
 import type { FighterProfile } from "../components/ProfileProvider";
 
 export type AgeBand = "Youth" | "Prime" | "Mature" | "Masters" | "Senior";
@@ -21,150 +20,163 @@ export type PlanType =
   | "YouthSafety"; // Plan G
 
 export type Discipline =
+  | "MMA"
+  | "Boxing"
   | "Wrestling"
   | "BJJ"
+  | "Sambo"
   | "MuayThai"
-  | "Boxing"
-  | "KarateTKD"
-  | "MMA"
-  | "None";
+  | "Kickboxing"
+  | "Strength"
+  | "Other";
 
-export type AthleteClass = {
+/** Output returned to Sensei / UI */
+export type AthleteClassifierResult = {
   ageBand: AgeBand;
-  level: LevelBand;
-  discipline: Discipline;
-  planType: PlanType;
+  levelBand: LevelBand;
+  plan: PlanType;
+  primaryDiscipline: Discipline;
+  notes: string; // clean merged notes used in prompts
 };
 
-/**
- * Classify age into bands.
- */
-export function classifyAge(ageRaw: string | number | undefined | null): AgeBand {
-  const age = Number(ageRaw || 0);
-  if (!age || Number.isNaN(age)) return "Prime";
+/** -----------------------------
+ * Helpers (defensive + build-safe)
+ * ---------------------------- */
+function toInt(v?: string): number | null {
+  if (!v) return null;
+  const n = parseInt(String(v).replace(/[^\d]/g, ""), 10);
+  return Number.isFinite(n) ? n : null;
+}
 
-  if (age < 18) return "Youth";
-  if (age <= 30) return "Prime";
-  if (age <= 40) return "Mature";
-  if (age <= 55) return "Masters";
+function toFloat(v?: string): number | null {
+  if (!v) return null;
+  const n = parseFloat(String(v).replace(/[^\d.]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function clamp(n: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, n));
+}
+
+function normalizeDiscipline(baseArt?: string): Discipline {
+  const s = (baseArt ?? "").toLowerCase();
+
+  if (s.includes("mma")) return "MMA";
+  if (s.includes("boxing")) return "Boxing";
+  if (s.includes("wrest")) return "Wrestling";
+  if (s.includes("bjj") || s.includes("jiu")) return "BJJ";
+  if (s.includes("sambo")) return "Sambo";
+  if (s.includes("muay")) return "MuayThai";
+  if (s.includes("kick")) return "Kickboxing";
+  if (s.includes("strength") || s.includes("gym")) return "Strength";
+
+  return "Other";
+}
+
+function computeAgeBand(ageStr?: string): AgeBand {
+  const age = toInt(ageStr);
+  if (age === null) return "Prime"; // default band if unknown
+  if (age <= 17) return "Youth";
+  if (age <= 34) return "Prime";
+  if (age <= 44) return "Mature";
+  if (age <= 54) return "Masters";
   return "Senior";
 }
 
-/**
- * Classify level from years training + competition level text.
- */
-export function classifyLevel(
-  yearsTrainingRaw: string | number | undefined | null,
-  competitionLevelRaw: string | undefined | null
-): LevelBand {
-  const years = Number(yearsTrainingRaw || 0);
-  const competitionLevel = (competitionLevelRaw || "").toLowerCase();
+function computeLevelBand(profile: FighterProfile): LevelBand {
+  const yrs = toFloat(profile.yearsTraining);
+  const comp = (profile.competitionLevel ?? "").toLowerCase();
 
-  if (years < 1) return "Beginner";
-  if (years < 2 && !/comp|tournament|fight/.test(competitionLevel))
-    return "Hobbyist";
+  // Quick heuristic (you can tune later)
+  if (comp.includes("pro")) return "Professional";
+  if (comp.includes("advanced")) return "AdvancedAmateur";
+  if (comp.includes("amateur")) return "Amateur";
 
-  if (/pro|professional/.test(competitionLevel)) return "Professional";
-
-  if (/amat|tournament|comp/.test(competitionLevel)) {
-    if (years <= 5) return "Amateur";
-    return "AdvancedAmateur";
-  }
-
-  if (years < 3) return "Hobbyist";
-  if (years < 7) return "Amateur";
-  if (years < 10) return "AdvancedAmateur";
+  if (yrs === null) return "Hobbyist";
+  if (yrs < 1) return "Beginner";
+  if (yrs < 3) return "Hobbyist";
+  if (yrs < 6) return "Amateur";
+  if (yrs < 10) return "AdvancedAmateur";
   return "Professional";
 }
 
 /**
- * Rough discipline inference from baseArt + secondaryArts.
+ * Notes block used for prompts.
+ * IMPORTANT: We read scheduleNotes/boundariesNotes defensively.
+ * Even if the type is missing them somewhere, this file won't crash at runtime.
  */
-export function inferDiscipline(profile: FighterProfile): Discipline {
-  const base = (profile.baseArt || "").toLowerCase();
-  const secondaries = (profile.secondaryArts || []).join(" ").toLowerCase();
-  const text = `${base} ${secondaries}`;
+function buildNotes(profile: FighterProfile): string {
+  const p = profile as any; // <-- defensive bridge across older types
 
-  if (/wrestl/.test(text)) return "Wrestling";
-  if (/bjj|jiu[-\s]?jitsu/.test(text)) return "BJJ";
-  if (/muay|thai/.test(text)) return "MuayThai";
-  if (/box/.test(text)) return "Boxing";
-  if (/karate|tae ?kwon ?do|tkd/.test(text)) return "KarateTKD";
-  if (/mma|mixed martial/.test(text)) return "MMA";
+  const scheduleNotes = (p.scheduleNotes ?? "").toString();
+  const boundariesNotes = (p.boundariesNotes ?? "").toString();
 
-  return "None";
+  const hardBoundaries = (profile.hardBoundaries ?? "").toString();
+  const campGoal = (profile.campGoal ?? "").toString();
+  const bodyType = (profile.bodyType ?? "").toString();
+  const injuryHistory = (profile.injuryHistory ?? "").toString();
+  const availability = (profile.availability ?? "").toString();
+  const lifeLoad = (profile.lifeLoad ?? "").toString();
+
+  // Keep it clean: remove empty lines
+  const lines = [
+    scheduleNotes && `Schedule notes: ${scheduleNotes}`,
+    boundariesNotes && `Boundaries notes: ${boundariesNotes}`,
+    hardBoundaries && `Hard boundaries: ${hardBoundaries}`,
+    campGoal && `Camp goal: ${campGoal}`,
+    bodyType && `Body type: ${bodyType}`,
+    injuryHistory && `Injury history: ${injuryHistory}`,
+    availability && `Availability: ${availability}`,
+    lifeLoad && `Life load: ${lifeLoad}`,
+  ].filter(Boolean);
+
+  return lines.join("\n");
 }
 
 /**
- * Choose high-level plan type based on age, level, injuries, and goal text.
- * This is the safety net that prevents reckless pro-style programming.
+ * Plan selection — simple rule set you can evolve.
+ * (The key is stable output, not perfect sports science yet.)
  */
-export function choosePlanType(profile: FighterProfile): PlanType {
-  const ageBand = classifyAge(profile.age);
-  const level = classifyLevel(profile.yearsTraining, (profile as any).competitionLevel);
+function pickPlan(profile: FighterProfile, ageBand: AgeBand, levelBand: LevelBand): PlanType {
+  const injury = (profile.injuryHistory ?? "").toLowerCase();
+  const lifeLoad = (profile.lifeLoad ?? "").toLowerCase();
 
-  const notes = `
-${profile.scheduleNotes || ""}
-${profile.boundariesNotes || ""}
-${profile.campGoal || ""}
-${profile.bodyType || ""}
-`.toLowerCase();
-
-  const hasSeriousInjury =
-    /menisc|acl|shoulder|rotator|back|spine|disc|neck|surgery|torn|fracture/.test(
-      notes
-    );
-
-  const shortNotice =
-    /short notice|10[-\s]?day|1[-\s]?week|2[-\s]?week/.test(
-      profile.campGoal?.toLowerCase() || ""
-    );
-
+  // If youth: safety first
   if (ageBand === "Youth") return "YouthSafety";
-  if (hasSeriousInjury) return "InjuryReturn";
-  if (shortNotice && ["Amateur", "AdvancedAmateur", "Professional"].includes(level))
+
+  // Injury heavy → injury return plan
+  if (injury.includes("knee") || injury.includes("shoulder") || injury.includes("back")) {
+    return "InjuryReturn";
+  }
+
+  // High life load + low availability → emergency plan
+  if (lifeLoad.includes("busy") || lifeLoad.includes("school") || lifeLoad.includes("work")) {
     return "EmergencyCamp";
+  }
 
-  if (ageBand === "Masters" || ageBand === "Senior") return "LongevityTechnique";
-  if (["Beginner", "Hobbyist"].includes(level)) return "HybridLearning";
-  if (level === "Professional" && ageBand === "Prime") return "HighPerformanceCamp";
-
-  // Default for most “normal” competitors
-  return "BalancedAmateurCamp";
+  // Level-driven
+  if (levelBand === "Beginner") return "LongevityTechnique";
+  if (levelBand === "Hobbyist") return "BalancedAmateurCamp";
+  if (levelBand === "Amateur") return "BalancedAmateurCamp";
+  if (levelBand === "AdvancedAmateur") return "HighPerformanceCamp";
+  return "HighPerformanceCamp";
 }
 
-/**
- * Produce a short text block explaining the athlete class to Sensei.
- */
-export function describeAthleteClass(
-  profile: FighterProfile
-): { athleteClass: AthleteClass; textBlock: string } {
-  const ageBand = classifyAge(profile.age);
-  const level = classifyLevel(profile.yearsTraining, (profile as any).competitionLevel);
-  const discipline = inferDiscipline(profile);
-  const planType = choosePlanType(profile);
+/** -----------------------------
+ * Main entry (what your app calls)
+ * ---------------------------- */
+export function classifyAthlete(profile: FighterProfile): AthleteClassifierResult {
+  const ageBand = computeAgeBand(profile.age);
+  const levelBand = computeLevelBand(profile);
+  const primaryDiscipline = normalizeDiscipline(profile.baseArt);
+  const notes = buildNotes(profile);
+  const plan = pickPlan(profile, ageBand, levelBand);
 
-  const athleteClass: AthleteClass = {
+  return {
     ageBand,
-    level,
-    discipline,
-    planType,
+    levelBand,
+    plan,
+    primaryDiscipline,
+    notes,
   };
-
-  const text = `
-ATHLETE CLASSIFICATION (FOR SAFETY & INTENSITY)
------------------------------------------------
-Age band: ${ageBand}
-Level: ${level}
-Primary discipline: ${discipline}
-Assigned plan type: ${planType}
-
-Safety constraints:
-- NEVER prescribe professional-level volume to anyone except a young, cleared Professional.
-- Masters and Senior athletes MUST prioritize longevity, joint health, and controlled intensity.
-- Youth athletes (<18) MUST NOT receive hard head sparring or brutal conditioning.
-- Injury flags (meniscus, ACL, shoulder, back, neck, surgery) override everything: treat them as InjuryReturn.
-`.trim();
-
-  return { athleteClass, textBlock: text };
 }
