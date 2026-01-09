@@ -34,7 +34,11 @@ export type FighterProfile = {
   injuryHistory?: string;
   hardBoundaries?: string;
   lifeLoad?: string;
-};
+  scheduleNotes?: string;
+boundariesNotes?: string;
+
+}
+
 
 type SaveResult = { ok: true } | { ok: false; error: string };
 

@@ -58,7 +58,7 @@ export default function DashboardPage() {
               </div>
               <div className="flex flex-col items-end gap-1">
                 <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.15em] text-emerald-300">
-                  Disciplin OS
+                  Disciplin 
                 </span>
                 <span className="text-[10px] text-slate-500">
                   Profile-powered Sensei
