@@ -30,18 +30,14 @@ export type Discipline =
   | "Strength"
   | "Other";
 
-/** Output returned to Sensei / UI */
 export type AthleteClassifierResult = {
   ageBand: AgeBand;
   levelBand: LevelBand;
   plan: PlanType;
   primaryDiscipline: Discipline;
-  notes: string; // clean merged notes used in prompts
+  notes: string; // merged prompt notes
 };
 
-/** -----------------------------
- * Helpers (defensive + build-safe)
- * ---------------------------- */
 function toInt(v?: string): number | null {
   if (!v) return null;
   const n = parseInt(String(v).replace(/[^\d]/g, ""), 10);
@@ -54,13 +50,12 @@ function toFloat(v?: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function clamp(n: number, a: number, b: number) {
-  return Math.max(a, Math.min(b, n));
+function isNonEmpty(v: unknown): v is string {
+  return typeof v === "string" && v.trim().length > 0;
 }
 
 function normalizeDiscipline(baseArt?: string): Discipline {
   const s = (baseArt ?? "").toLowerCase();
-
   if (s.includes("mma")) return "MMA";
   if (s.includes("boxing")) return "Boxing";
   if (s.includes("wrest")) return "Wrestling";
@@ -69,13 +64,12 @@ function normalizeDiscipline(baseArt?: string): Discipline {
   if (s.includes("muay")) return "MuayThai";
   if (s.includes("kick")) return "Kickboxing";
   if (s.includes("strength") || s.includes("gym")) return "Strength";
-
   return "Other";
 }
 
 function computeAgeBand(ageStr?: string): AgeBand {
   const age = toInt(ageStr);
-  if (age === null) return "Prime"; // default band if unknown
+  if (age === null) return "Prime";
   if (age <= 17) return "Youth";
   if (age <= 34) return "Prime";
   if (age <= 44) return "Mature";
@@ -87,7 +81,6 @@ function computeLevelBand(profile: FighterProfile): LevelBand {
   const yrs = toFloat(profile.yearsTraining);
   const comp = (profile.competitionLevel ?? "").toLowerCase();
 
-  // Quick heuristic (you can tune later)
   if (comp.includes("pro")) return "Professional";
   if (comp.includes("advanced")) return "AdvancedAmateur";
   if (comp.includes("amateur")) return "Amateur";
@@ -100,61 +93,49 @@ function computeLevelBand(profile: FighterProfile): LevelBand {
   return "Professional";
 }
 
-/**
- * Notes block used for prompts.
- * IMPORTANT: We read scheduleNotes/boundariesNotes defensively.
- * Even if the type is missing them somewhere, this file won't crash at runtime.
- */
 function buildNotes(profile: FighterProfile): string {
-  const p = profile as any; // <-- defensive bridge across older types
+  // ✅ Narrowing: do NOT assume these props exist on FighterProfile
+  const scheduleNotes =
+    "scheduleNotes" in profile ? (profile as any).scheduleNotes : undefined;
 
-  const scheduleNotes = (p.scheduleNotes ?? "").toString();
-  const boundariesNotes = (p.boundariesNotes ?? "").toString();
+  const boundariesNotes =
+    "boundariesNotes" in profile ? (profile as any).boundariesNotes : undefined;
 
-  const hardBoundaries = (profile.hardBoundaries ?? "").toString();
-  const campGoal = (profile.campGoal ?? "").toString();
-  const bodyType = (profile.bodyType ?? "").toString();
-  const injuryHistory = (profile.injuryHistory ?? "").toString();
-  const availability = (profile.availability ?? "").toString();
-  const lifeLoad = (profile.lifeLoad ?? "").toString();
+  const hardBoundaries = profile.hardBoundaries;
+  const campGoal = profile.campGoal;
+  const bodyType = profile.bodyType;
+  const injuryHistory = profile.injuryHistory;
+  const availability = profile.availability;
+  const lifeLoad = profile.lifeLoad;
 
-  // Keep it clean: remove empty lines
   const lines = [
-    scheduleNotes && `Schedule notes: ${scheduleNotes}`,
-    boundariesNotes && `Boundaries notes: ${boundariesNotes}`,
-    hardBoundaries && `Hard boundaries: ${hardBoundaries}`,
-    campGoal && `Camp goal: ${campGoal}`,
-    bodyType && `Body type: ${bodyType}`,
-    injuryHistory && `Injury history: ${injuryHistory}`,
-    availability && `Availability: ${availability}`,
-    lifeLoad && `Life load: ${lifeLoad}`,
-  ].filter(Boolean);
+    isNonEmpty(scheduleNotes) && `Schedule notes: ${scheduleNotes}`,
+    isNonEmpty(boundariesNotes) && `Boundaries notes: ${boundariesNotes}`,
+    isNonEmpty(hardBoundaries) && `Hard boundaries: ${hardBoundaries}`,
+    isNonEmpty(campGoal) && `Camp goal: ${campGoal}`,
+    isNonEmpty(bodyType) && `Body type: ${bodyType}`,
+    isNonEmpty(injuryHistory) && `Injury history: ${injuryHistory}`,
+    isNonEmpty(availability) && `Availability: ${availability}`,
+    isNonEmpty(lifeLoad) && `Life load: ${lifeLoad}`,
+  ].filter(Boolean) as string[];
 
   return lines.join("\n");
 }
 
-/**
- * Plan selection — simple rule set you can evolve.
- * (The key is stable output, not perfect sports science yet.)
- */
 function pickPlan(profile: FighterProfile, ageBand: AgeBand, levelBand: LevelBand): PlanType {
   const injury = (profile.injuryHistory ?? "").toLowerCase();
-  const lifeLoad = (profile.lifeLoad ?? "").toLowerCase();
+  const load = (profile.lifeLoad ?? "").toLowerCase();
 
-  // If youth: safety first
   if (ageBand === "Youth") return "YouthSafety";
 
-  // Injury heavy → injury return plan
   if (injury.includes("knee") || injury.includes("shoulder") || injury.includes("back")) {
     return "InjuryReturn";
   }
 
-  // High life load + low availability → emergency plan
-  if (lifeLoad.includes("busy") || lifeLoad.includes("school") || lifeLoad.includes("work")) {
+  if (load.includes("busy") || load.includes("school") || load.includes("work")) {
     return "EmergencyCamp";
   }
 
-  // Level-driven
   if (levelBand === "Beginner") return "LongevityTechnique";
   if (levelBand === "Hobbyist") return "BalancedAmateurCamp";
   if (levelBand === "Amateur") return "BalancedAmateurCamp";
@@ -162,9 +143,6 @@ function pickPlan(profile: FighterProfile, ageBand: AgeBand, levelBand: LevelBan
   return "HighPerformanceCamp";
 }
 
-/** -----------------------------
- * Main entry (what your app calls)
- * ---------------------------- */
 export function classifyAthlete(profile: FighterProfile): AthleteClassifierResult {
   const ageBand = computeAgeBand(profile.age);
   const levelBand = computeLevelBand(profile);
@@ -172,11 +150,5 @@ export function classifyAthlete(profile: FighterProfile): AthleteClassifierResul
   const notes = buildNotes(profile);
   const plan = pickPlan(profile, ageBand, levelBand);
 
-  return {
-    ageBand,
-    levelBand,
-    plan,
-    primaryDiscipline,
-    notes,
-  };
+  return { ageBand, levelBand, plan, primaryDiscipline, notes };
 }
