@@ -34,11 +34,11 @@ export type FighterProfile = {
   injuryHistory?: string;
   hardBoundaries?: string;
   lifeLoad?: string;
+
+  // ✅ Added for athleteClassifier
   scheduleNotes?: string;
-boundariesNotes?: string;
-
-}
-
+  boundariesNotes?: string;
+};
 
 type SaveResult = { ok: true } | { ok: false; error: string };
 
