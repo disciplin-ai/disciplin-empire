@@ -2,9 +2,9 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { z } from "zod";
-import { supabaseServer } from "@/lib/supabaseServer";
-import type { SenseiResponse } from "@/lib/senseiTypes";
-import { senseiJsonSchema } from "@/lib/senseiTypes";
+import { supabaseServer } from "../../../lib/supabaseServer";
+import type { SenseiResponse } from "../../../lib/senseiTypes";
+import { senseiJsonSchema } from "../../../lib/senseiTypes";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
