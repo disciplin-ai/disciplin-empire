@@ -27,20 +27,19 @@ function buildSenseiSystemRules() {
     "You must always output exactly 5 sections in this exact order:",
     "1) overview  2) training  3) nutrition  4) recovery  5) questions",
     "",
-    "Each section must be DETAILED but not long:",
+    "Detailed but NOT long:",
     "- Use 3–6 blocks per section.",
     "- Each block has 1–3 bullets.",
-    "- Every bullet must include at least one concrete element:",
+    "- Each bullet must include at least one concrete element:",
     "  number / cap / timing / threshold / frequency / do/avoid.",
     "- No self-corrections. No 'maybe'. Commit to one plan.",
     "",
-    "Questions section rules:",
+    "Questions section:",
     "- Ask 1–2 questions max.",
-    "- Questions must change the next plan (no generic questions).",
+    "- Questions must change the next plan.",
     "",
-    "Nutrition section rules:",
+    "Nutrition section:",
     "- Provide specific targets (one kcal target or tight range), timing, and 2–4 constraints.",
-    "- Keep it in blocks (no paragraphs).",
   ].join("\n");
 }
 
@@ -69,16 +68,8 @@ function buildPrompt(args: {
           JSON.stringify(answers ?? {}, null, 2),
           "TASK: Update the 5 sections using the answers. Keep the same followups_id.",
         ].join("\n")
-      : [
-          "MODE: plan",
-          "TASK: Produce the 5 sections for this week label using the context.",
-        ].join("\n"),
+      : ["MODE: plan", "TASK: Produce the 5 sections for this week label using the context."].join("\n"),
   ].join("\n");
-}
-
-function safeJsonParse<T>(raw: string): T {
-  const v = JSON.parse(raw) as T;
-  return v;
 }
 
 export async function POST(req: Request) {
@@ -105,7 +96,6 @@ export async function POST(req: Request) {
       answers: parsed.data.answers,
     });
 
-    // NOTE: This matches the input style that has worked in your repo:
     const resp = await openai.responses.create({
       model: "gpt-5.1",
       input: [
@@ -130,10 +120,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "Sensei returned empty output." }, { status: 500 });
     }
 
-    const out = safeJsonParse<SenseiResponse>(raw);
-
-    // Optional: store to Supabase if you want (recommended later)
-    // await sb.from("sensei_runs").insert({...})
+    const out = JSON.parse(raw) as SenseiResponse;
 
     return NextResponse.json({ ok: true, ...out });
   } catch (err: any) {

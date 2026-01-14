@@ -10,22 +10,22 @@ export type SenseiSectionId =
 export type SenseiConfidence = "low" | "med" | "high";
 
 export type SenseiBlock = {
-  label: string;                 // e.g. "VOLUME", "INTENSITY", "STRUCTURE"
-  bullets: string[];             // 1–3, concrete
-  metrics?: Record<string, string>; // optional key-value row
+  label: string; // e.g. "VOLUME", "INTENSITY", "STRUCTURE"
+  bullets: string[]; // 1–3, each must be concrete
+  metrics?: Record<string, string>; // optional mini row: { "Cap": "8/10" }
 };
 
 export type SenseiSection = {
   id: SenseiSectionId;
-  title: string;                 // e.g. "TRAINING"
-  week: string;                  // e.g. "Week 2" or "Fight Week"
+  title: string; // e.g. "TRAINING"
+  week: string; // e.g. "Week 2" / "Fight Week"
   confidence: SenseiConfidence;
-  blocks: SenseiBlock[];         // 3–6 blocks
+  blocks: SenseiBlock[]; // 3–6 blocks
 };
 
 export type SenseiResponse = {
   followups_id: string;
-  sections: SenseiSection[];     // always 5 sections in correct order
+  sections: SenseiSection[]; // always 5
 };
 
 export function senseiJsonSchema() {
