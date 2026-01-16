@@ -1,10 +1,42 @@
 "use client";
 
+import React, { useEffect, useMemo, useState } from "react";
 import { useProfile } from "../../components/ProfileProvider";
 import { useSenseiPlan } from "../../hooks/useSenseiPlan";
+import Link from "next/link";
+
+type Goal = "pressure" | "speed" | "power" | "recovery" | "mixed";
+
+const DASH_KEY = "disciplin_dash_v2";
+
+type DashMem = {
+  lastGoal?: Goal;
+  lastSenseiAt?: string; // ISO
+  lastFuelAt?: string; // ISO (we don’t have real Fuel hook here yet, so manual)
+};
+
+function relTime(iso?: string) {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "—";
+  const mins = Math.floor((Date.now() - t) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function goalLabel(g: Goal) {
+  if (g === "pressure") return "Pressure";
+  if (g === "speed") return "Speed";
+  if (g === "power") return "Power";
+  if (g === "recovery") return "Recovery";
+  return "Mixed";
+}
 
 export default function DashboardPage() {
-  const { profile, loading: profileLoading } = useProfile();
+  const { profile, loading: profileLoading, user } = useProfile();
   const {
     plan,
     loading: senseiLoading,
@@ -13,34 +45,103 @@ export default function DashboardPage() {
     resetPlan,
   } = useSenseiPlan();
 
-  const handleAskSensei = (goal: "pressure" | "speed" | "power" | "recovery" | "mixed") => {
-    // We only give the session context.
-    // Sensei hook automatically injects the full fighter profile.
-    resetPlan();
-    askSensei({
-      goal,
-      // You can add more context later:
-      // daysToNextFight: profile?.campDays ?? 42,
-      // lastSessionFocus: "wrestling pressure",
-      // lastSessionRPE: 8,
-    });
+  const [dash, setDash] = useState<DashMem>({});
+  const [toast, setToast] = useState<string | null>(null);
+
+  // load/save dashboard memory
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DASH_KEY);
+      if (raw) setDash(JSON.parse(raw));
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DASH_KEY, JSON.stringify(dash));
+    } catch {}
+  }, [dash]);
+
+  const ping = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 1600);
   };
 
   const nickname =
     (profile as any)?.nickname ||
     (profile as any)?.fightName ||
     (profile as any)?.username ||
+    profile?.name ||
     "Unknown fighter";
 
   const baseArt = (profile as any)?.baseArt || "Set your base art";
-  const competitionLevel =
-    (profile as any)?.competitionLevel || "Not set yet";
+  const competitionLevel = (profile as any)?.competitionLevel || "Not set";
   const weeklySessions = (profile as any)?.weeklySessions || "0";
+
+  const profileReady = !!profile;
+  const todayGoal = dash.lastGoal ?? "mixed";
+  const todaySensei = dash.lastSenseiAt ? relTime(dash.lastSenseiAt) : "Not started";
+  const todayFuel = dash.lastFuelAt ? relTime(dash.lastFuelAt) : "Not logged";
+
+  const handleAskSensei = (goal: Goal) => {
+    // Interactive dashboard effect first (so it doesn’t feel dead)
+    resetPlan();
+
+    setDash((d) => ({
+      ...d,
+      lastGoal: goal,
+      lastSenseiAt: new Date().toISOString(),
+    }));
+
+    ping(`Focus set: ${goalLabel(goal)}`);
+
+    // The hook injects the full fighter profile
+    askSensei({ goal });
+  };
+
+  const markFuelLogged = () => {
+    setDash((d) => ({ ...d, lastFuelAt: new Date().toISOString() }));
+    ping("Fuel marked as logged");
+  };
+
+  const goalButtons: Array<{
+    goal: Goal;
+    title: string;
+    desc: string;
+  }> = useMemo(
+    () => [
+      { goal: "pressure", title: "Pressure", desc: "Wrestling pace, cage work, cardio warfare." },
+      { goal: "speed", title: "Speed", desc: "Sharp striking, crisp reactions." },
+      { goal: "power", title: "Power", desc: "Explosive shots, low volume, perfect form." },
+      { goal: "recovery", title: "Recovery", desc: "Low impact, technical drills, reset." },
+      { goal: "mixed", title: "Mixed", desc: "Balanced striking + grappling focus." },
+    ],
+    []
+  );
 
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-slate-950">
       <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 md:py-10">
-        {/* Top row: fighter + quick stats */}
+        {/* TODAY STRIP (makes it feel alive) */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Today</p>
+            <p className="mt-1 text-sm text-slate-200">
+              Focus:{" "}
+              <span className="text-emerald-300 font-semibold">{goalLabel(todayGoal)}</span>
+              {"  "}• Sensei: <span className="text-slate-300">{todaySensei}</span>
+              {"  "}• Fuel: <span className="text-slate-300">{todayFuel}</span>
+            </p>
+          </div>
+
+          {toast && (
+            <span className="text-[11px] px-3 py-1 rounded-full border border-slate-700 bg-slate-900/40 text-slate-200">
+              {toast}
+            </span>
+          )}
+        </div>
+
+        {/* Top row: fighter + quick Sensei selector */}
         <section className="grid gap-4 md:grid-cols-[1.6fr,1.1fr]">
           {/* Fighter identity card */}
           <div className="rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900/90 via-slate-950 to-slate-950 p-4 md:p-5">
@@ -56,13 +157,12 @@ export default function DashboardPage() {
                   {baseArt} • {competitionLevel}
                 </p>
               </div>
+
               <div className="flex flex-col items-end gap-1">
                 <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.15em] text-emerald-300">
-                  Disciplin 
+                  DISCIPLIN
                 </span>
-                <span className="text-[10px] text-slate-500">
-                  Profile-powered Sensei
-                </span>
+                <span className="text-[10px] text-slate-500">Profile-powered Sensei</span>
               </div>
             </div>
 
@@ -75,7 +175,7 @@ export default function DashboardPage() {
                   {weeklySessions}
                 </p>
                 <p className="mt-1 text-[11px] text-slate-400">
-                  Logged in profile. Sensei uses this for volume.
+                  (Upgrade later) This drives volume.
                 </p>
               </div>
 
@@ -84,30 +184,24 @@ export default function DashboardPage() {
                   Sensei status
                 </p>
                 <p className="mt-1 text-sm font-semibold text-emerald-300">
-                  {senseiLoading
-                    ? "Calculating session…"
-                    : plan
-                    ? "Session ready"
-                    : "Idle"}
+                  {senseiLoading ? "Calculating…" : plan ? "Session ready" : "Idle"}
                 </p>
                 <p className="mt-1 text-[11px] text-slate-400">
-                  Profile + goal → structured round plan.
+                  Last: {dash.lastSenseiAt ? relTime(dash.lastSenseiAt) : "—"}
                 </p>
               </div>
 
               <div className="rounded-xl border border-slate-800/80 bg-slate-900/70 p-3">
                 <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">
-                  Profile link
+                  Profile
                 </p>
                 <p className="mt-1 text-sm text-slate-200">
-                  {profileLoading
-                    ? "Loading…"
-                    : profile
-                    ? "Profile complete"
-                    : "Go to Profile and fill everything."}
+                  {profileLoading ? "Loading…" : profile ? "Profile set" : "Not set"}
                 </p>
                 <p className="mt-1 text-[11px] text-slate-400">
-                  Sensei will refuse if your profile is missing.
+                  <Link href="/profile" className="underline hover:text-emerald-200">
+                    Edit profile
+                  </Link>
                 </p>
               </div>
             </div>
@@ -121,82 +215,51 @@ export default function DashboardPage() {
                   Sensei session
                 </p>
                 <p className="mt-1 text-sm text-slate-200">
-                  Choose the focus. Sensei uses your profile automatically.
+                  Choose the focus. Dashboard reacts instantly.
                 </p>
               </div>
+              <span className="text-[11px] text-slate-400">
+                Focus: <span className="text-emerald-300 font-semibold">{goalLabel(todayGoal)}</span>
+              </span>
             </div>
 
             <div className="grid grid-cols-2 gap-2 text-[11px] md:grid-cols-3">
-              <button
-                onClick={() => handleAskSensei("pressure")}
-                disabled={senseiLoading || !profile}
-                className="rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2 text-left font-medium text-slate-100 transition hover:border-emerald-500/70 hover:bg-slate-900/90 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Pressure
-                <span className="mt-1 block text-[10px] font-normal text-slate-400">
-                  Wrestling pace, cage work, cardio warfare.
-                </span>
-              </button>
-
-              <button
-                onClick={() => handleAskSensei("speed")}
-                disabled={senseiLoading || !profile}
-                className="rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2 text-left font-medium text-slate-100 transition hover:border-emerald-500/70 hover:bg-slate-900/90 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Speed
-                <span className="mt-1 block text-[10px] font-normal text-slate-400">
-                  Sharp striking, crisp reactions.
-                </span>
-              </button>
-
-              <button
-                onClick={() => handleAskSensei("power")}
-                disabled={senseiLoading || !profile}
-                className="rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2 text-left font-medium text-slate-100 transition hover:border-emerald-500/70 hover:bg-slate-900/90 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Power
-                <span className="mt-1 block text-[10px] font-normal text-slate-400">
-                  Explosive shots, low volume, form.
-                </span>
-              </button>
-
-              <button
-                onClick={() => handleAskSensei("recovery")}
-                disabled={senseiLoading || !profile}
-                className="rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2 text-left font-medium text-slate-100 transition hover:border-emerald-500/70 hover:bg-slate-900/90 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Recovery
-                <span className="mt-1 block text-[10px] font-normal text-slate-400">
-                  Low impact, technical drills, reset.
-                </span>
-              </button>
-
-              <button
-                onClick={() => handleAskSensei("mixed")}
-                disabled={senseiLoading || !profile}
-                className="rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2 text-left font-medium text-slate-100 transition hover:border-emerald-500/70 hover:bg-slate-900/90 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Mixed
-                <span className="mt-1 block text-[10px] font-normal text-slate-400">
-                  Balanced striking + grappling focus.
-                </span>
-              </button>
+              {goalButtons.map((b) => {
+                const active = todayGoal === b.goal;
+                return (
+                  <button
+                    key={b.goal}
+                    onClick={() => handleAskSensei(b.goal)}
+                    disabled={senseiLoading || !profileReady}
+                    className={[
+                      "rounded-xl border px-3 py-2 text-left font-medium transition disabled:cursor-not-allowed disabled:opacity-40",
+                      active
+                        ? "border-emerald-500/70 bg-emerald-500/10 text-emerald-100"
+                        : "border-slate-800 bg-slate-900/80 text-slate-100 hover:border-emerald-500/70 hover:bg-slate-900/90",
+                    ].join(" ")}
+                  >
+                    {b.title}
+                    <span className="mt-1 block text-[10px] font-normal text-slate-400">
+                      {b.desc}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
 
             {senseiError && (
               <p className="mt-1 text-[11px] text-rose-400">Sensei: {senseiError}</p>
             )}
 
-            {!profile && !profileLoading && (
+            {!profileReady && !profileLoading && (
               <p className="mt-1 text-[11px] text-amber-400">
-                Complete your Profile first. Sensei needs your style, stance,
-                weight, and level.
+                Complete your Profile first. Sensei needs style, stance, weight, and level.
               </p>
             )}
           </div>
         </section>
 
-        {/* Sensei output + log area */}
+        {/* Sensei output + Unlock gates */}
         <section className="grid gap-4 md:grid-cols-[1.6fr,1.1fr]">
           {/* Sensei plan viewer */}
           <div className="rounded-2xl border border-slate-800 bg-slate-950/90 p-4 md:p-5">
@@ -206,7 +269,7 @@ export default function DashboardPage() {
                   Session blueprint
                 </p>
                 <p className="mt-1 text-sm text-slate-200">
-                  Warmup, rounds, finisher, safety — all built from your profile.
+                  Warmup, rounds, finisher, safety — built from your profile.
                 </p>
               </div>
               {plan && (
@@ -221,9 +284,7 @@ export default function DashboardPage() {
 
             {!plan && (
               <div className="mt-6 rounded-xl border border-dashed border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-400">
-                Choose a focus in the Sensei panel on the right. Your saved
-                fighter profile will be used to build a full technical session,
-                not a random workout.
+                Choose a focus on the right. The dashboard will remember it.
               </div>
             )}
 
@@ -250,20 +311,14 @@ export default function DashboardPage() {
                         key={round.round}
                         className="rounded-xl border border-slate-800 bg-slate-900/70 p-3"
                       >
-                        <div className="flex items-center justify-between">
-                          <p className="text-[11px] font-semibold text-slate-100">
-                            Round {round.round} • {round.durationSeconds}s •{" "}
-                            <span className="uppercase tracking-wide text-emerald-300">
-                              {round.intensity}
-                            </span>
-                          </p>
-                        </div>
-                        <p className="mt-1 text-[11px] text-slate-300">
-                          Focus: {round.focus}
+                        <p className="text-[11px] font-semibold text-slate-100">
+                          Round {round.round} • {round.durationSeconds}s •{" "}
+                          <span className="uppercase tracking-wide text-emerald-300">
+                            {round.intensity}
+                          </span>
                         </p>
-                        <p className="mt-1 text-[11px] text-slate-300">
-                          Drill: {round.drill}
-                        </p>
+                        <p className="mt-1 text-[11px] text-slate-300">Focus: {round.focus}</p>
+                        <p className="mt-1 text-[11px] text-slate-300">Drill: {round.drill}</p>
                         <p className="mt-1 text-[11px] text-slate-400">
                           Cues: {round.coachingCues.join(" • ")}
                         </p>
@@ -276,9 +331,7 @@ export default function DashboardPage() {
                   <h3 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
                     Finisher
                   </h3>
-                  <p className="mt-2 text-[11px] text-slate-300">
-                    {plan.finisher}
-                  </p>
+                  <p className="mt-2 text-[11px] text-slate-300">{plan.finisher}</p>
                 </div>
 
                 <div className="grid gap-3 md:grid-cols-2">
@@ -308,27 +361,54 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Right column placeholder for future: logs, Discipline score, Fuel link */}
+          {/* Right: unlock gates instead of "coming soon" */}
           <div className="flex flex-col gap-4">
             <div className="rounded-2xl border border-slate-800 bg-slate-950/90 p-4 md:p-5">
               <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
-                Training log (coming soon)
+                Training log
               </p>
               <p className="mt-2 text-xs text-slate-300">
-                Here you&apos;ll see sessions you actually completed, linked to
-                Fuel AI and your Discipline score. For now, use the Sensei
-                plan, execute it, and log details manually.
+                Unlock after your first Sensei session.
               </p>
+              <div className="mt-3 flex items-center justify-between">
+                <span className="text-[11px] text-slate-400">
+                  Progress: {dash.lastSenseiAt ? "1/1" : "0/1"}
+                </span>
+                <button
+                  onClick={() => handleAskSensei(dash.lastGoal ?? "mixed")}
+                  disabled={senseiLoading || !profileReady}
+                  className="rounded-full border border-slate-700 px-3 py-1 text-[11px] text-slate-300 hover:border-emerald-400 hover:text-emerald-200 disabled:opacity-40"
+                >
+                  Start →
+                </button>
+              </div>
             </div>
 
             <div className="rounded-2xl border border-slate-800 bg-slate-950/90 p-4 md:p-5">
               <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
-                Fuel & Discipline (coming soon)
+                Fuel score
               </p>
               <p className="mt-2 text-xs text-slate-300">
-                Fuel AI and Discipline Engine will sync your meals, sessions,
-                and rounds into one score. This panel becomes your central
-                pressure gauge.
+                Unlock after logging 1 meal in Fuel.
+              </p>
+              <div className="mt-3 flex items-center justify-between">
+                <span className="text-[11px] text-slate-400">
+                  Progress: {dash.lastFuelAt ? "1/1" : "0/1"}
+                </span>
+                <Link
+                  href="/fuel"
+                  onClick={markFuelLogged}
+                  className="rounded-full border border-slate-700 px-3 py-1 text-[11px] text-slate-300 hover:border-emerald-400 hover:text-emerald-200"
+                >
+                  Open Fuel →
+                </Link>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+              <p className="text-xs font-semibold text-emerald-100">Micro-win</p>
+              <p className="mt-1 text-xs text-emerald-100/90">
+                The dashboard now remembers focus and updates instantly. Next: wire this into a real training log.
               </p>
             </div>
           </div>

@@ -12,7 +12,7 @@ export default function Navbar() {
             href="/"
             className="text-emerald-300 font-semibold tracking-[0.2em] text-xs"
           >
-            DISCIPLIN OS
+            DISCIPLIN
           </Link>
 
           <nav className="flex items-center gap-5 text-sm text-slate-200">
