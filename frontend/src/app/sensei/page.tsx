@@ -1,139 +1,214 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useProfile } from "../../components/ProfileProvider";
+import type { SenseiResponse, SenseiSection } from "../../lib/senseiTypes";
 import SenseiCards from "../../components/SenseiCards";
-import type { SenseiResponse } from "../../lib/senseiTypes";
 
-const SENSEI_STORAGE_KEY = "disciplin_sensei_last_camp_v5";
+type CampId = string;
+type SectionId = "overview" | "training" | "nutrition" | "recovery" | "questions";
 
-type SenseiSavedState = {
-  style: string;
-  favourites: string;
+type Msg = { id: string; from: "user" | "sensei"; text: string; ts: number };
+
+type CampThread = {
+  id: CampId;
+  title: string;
+  createdAt: number;
+
+  // inputs
   week: string;
-  weightGoal: string;
   scenario: string;
-  lastResponse?: SenseiResponse | null;
+
+  // plan
+  followups_id?: string;
+  plan?: SenseiResponse;
+
+  // per-section chat
+  chats: Record<SectionId, Msg[]>;
 };
 
-type SenseiRequest =
-  | { mode: "plan"; week: string; context: string }
-  | { mode: "refine"; week: string; context: string; followups_id: string; answers: Record<string, string> };
+const STORAGE_KEY = "disciplin_sensei_threads_v1";
 
-async function callSensei(payload: SenseiRequest): Promise<SenseiResponse> {
-  const res = await fetch("/api/sensei", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include", // ✅ fixes Not authenticated
-    body: JSON.stringify(payload),
-  });
-
-  const json = await res.json().catch(() => null);
-  if (!res.ok || !json?.ok) {
-    throw new Error(json?.error || `Sensei failed (${res.status})`);
-  }
-
-  return json as SenseiResponse; // { ok:true, followups_id, sections }
+function uid() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+async function postJson<T>(url: string, body: any): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) throw new Error(json?.error || `Request failed (${res.status})`);
+  return json as T;
+}
+
+function cn(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(" ");
+}
+
+const SECTION_LABELS: Record<SectionId, string> = {
+  overview: "Overview",
+  training: "Training",
+  nutrition: "Nutrition",
+  recovery: "Recovery",
+  questions: "Questions",
+};
+
 export default function SenseiPage() {
-  const { user, loading: authLoading } = useProfile();
+  const { user, loading: authLoading, profile } = useProfile();
 
-  const [style, setStyle] = useState("pressure wrestler, southpaw striker");
-  const [favourites, setFavourites] = useState("Merab, Ilia, Khabib, Leon");
-  const [week, setWeek] = useState("Week 1");
-  const [weightGoal, setWeightGoal] = useState("");
-  const [scenario, setScenario] = useState("");
+  const [threads, setThreads] = useState<CampThread[]>([]);
+  const [activeId, setActiveId] = useState<CampId | null>(null);
 
-  const [senseiData, setSenseiData] = useState<SenseiResponse | null>(null);
-  const [answersText, setAnswersText] = useState("");
+  const [activeSection, setActiveSection] = useState<SectionId>("overview");
+  const [askText, setAskText] = useState("");
+  const [answersText, setAnswersText] = useState(""); // refine answers (one per line)
 
-  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
+  // load threads
   useEffect(() => {
-    if (typeof window === "undefined") return;
     try {
-      const raw = window.localStorage.getItem(SENSEI_STORAGE_KEY);
+      const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
-      const saved: SenseiSavedState = JSON.parse(raw);
-
-      setStyle(saved.style ?? style);
-      setFavourites(saved.favourites ?? favourites);
-      setWeek(saved.week ?? "Week 1");
-      setWeightGoal(saved.weightGoal ?? "");
-      setScenario(saved.scenario ?? "");
-      setSenseiData(saved.lastResponse ?? null);
+      const parsed = JSON.parse(raw) as CampThread[];
+      setThreads(parsed);
+      if (parsed.length) setActiveId(parsed[0].id);
     } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // save threads
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const toSave: SenseiSavedState = {
-      style,
-      favourites,
-      week,
-      weightGoal,
-      scenario,
-      lastResponse: senseiData,
-    };
     try {
-      window.localStorage.setItem(SENSEI_STORAGE_KEY, JSON.stringify(toSave));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(threads));
     } catch {}
-  }, [style, favourites, week, weightGoal, scenario, senseiData]);
+  }, [threads]);
+
+  const active = useMemo(() => threads.find((t) => t.id === activeId) ?? null, [threads, activeId]);
+
+  function ping(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 1500);
+  }
+
+  function createThread() {
+    const t: CampThread = {
+      id: uid(),
+      title: "New camp",
+      createdAt: Date.now(),
+      week: "Week 1",
+      scenario: "",
+      chats: { overview: [], training: [], nutrition: [], recovery: [], questions: [] },
+    };
+    setThreads((x) => [t, ...x]);
+    setActiveId(t.id);
+    setActiveSection("overview");
+    setAskText("");
+    setAnswersText("");
+    ping("New camp created");
+  }
+
+  function renameThread(id: string) {
+    const title = prompt("Rename camp:", active?.title ?? "Camp");
+    if (!title) return;
+    setThreads((x) => x.map((t) => (t.id === id ? { ...t, title } : t)));
+  }
+
+  function deleteThread(id: string) {
+    if (!confirm("Delete this camp thread?")) return;
+    setThreads((x) => x.filter((t) => t.id !== id));
+    if (activeId === id) setActiveId(null);
+  }
+
+  function updateActive(patch: Partial<CampThread>) {
+    if (!active) return;
+    setThreads((x) => x.map((t) => (t.id === active.id ? { ...t, ...patch } : t)));
+  }
 
   const context = useMemo(() => {
+    // profile constants
+    const cw = (profile as any)?.currentWeight || profile?.walkAroundWeight || "";
+    const tw = (profile as any)?.targetWeight || "";
+    const base = profile?.baseArt || "";
+    const lvl = profile?.competitionLevel || "";
+    const pace = profile?.paceStyle || "";
+    const campGoal = profile?.campGoal || "";
+
     return [
-      `Style: ${style}`,
-      `Closest fighters: ${favourites}`,
-      `Week label: ${week}`,
-      `Weight goal: ${weightGoal || "(not provided)"}`,
-      `Scenario: ${scenario || "(not provided)"}`,
+      "PROFILE:",
+      JSON.stringify(
+        {
+          name: profile?.name || "",
+          baseArt: base,
+          stance: profile?.stance || "",
+          competitionLevel: lvl,
+          paceStyle: pace,
+          currentWeight: cw,
+          targetWeight: tw,
+          campGoal,
+          injuryHistory: profile?.injuryHistory || "",
+          hardBoundaries: profile?.hardBoundaries || "",
+          scheduleNotes: (profile as any)?.scheduleNotes || "",
+          boundariesNotes: (profile as any)?.boundariesNotes || "",
+        },
+        null,
+        2
+      ),
+      "",
+      "SCENARIO:",
+      active?.scenario?.trim() || "",
     ].join("\n");
-  }, [style, favourites, week, weightGoal, scenario]);
+  }, [profile, active?.scenario]);
 
-  const canRun = !!user && !authLoading && !loading;
-
-  async function handleGenerate() {
+  async function generateCamp() {
     if (!user) {
       setError("Sign in to use Sensei.");
       return;
     }
-    if (!scenario.trim()) {
-      setError("Add a scenario/problem so Sensei can plan properly.");
+    if (!active) return;
+    if (!active.scenario.trim()) {
+      setError("Add a scenario/problem first.");
       return;
     }
 
-    setLoading(true);
+    setBusy(true);
     setError(null);
-    setNotice(null);
 
     try {
-      const resp = await callSensei({ mode: "plan", week, context });
-      setSenseiData(resp);
+      const resp = await postJson<{ ok: true } & SenseiResponse>("/api/sensei", {
+        mode: "plan",
+        week: active.week || "Week 1",
+        context,
+      });
+
+      updateActive({ plan: resp, followups_id: resp.followups_id });
+      setActiveSection("overview");
       setAnswersText("");
-      setNotice("Camp generated. Use Questions → answer → refine.");
+      ping("Camp generated");
     } catch (e: any) {
       setError(e?.message ?? "Sensei failed.");
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   }
 
-  async function handleRefine() {
+  async function refineCamp() {
     if (!user) {
       setError("Sign in to refine.");
       return;
     }
-    if (!senseiData) {
+    if (!active?.plan?.followups_id && !active?.followups_id) {
       setError("Generate a camp first.");
       return;
     }
 
     const lines = answersText.split("\n").map((l) => l.trim()).filter(Boolean);
-    if (lines.length === 0) {
+    if (!lines.length) {
       setError("Add at least one answer line before refining.");
       return;
     }
@@ -141,159 +216,327 @@ export default function SenseiPage() {
     const answers: Record<string, string> = {};
     lines.forEach((line, i) => (answers[String(i + 1)] = line));
 
-    setLoading(true);
+    setBusy(true);
     setError(null);
-    setNotice(null);
 
     try {
-      const resp = await callSensei({
+      const resp = await postJson<{ ok: true } & SenseiResponse>("/api/sensei", {
         mode: "refine",
-        week,
+        week: active.week || "Week 1",
         context,
-        followups_id: senseiData.followups_id,
+        followups_id: active.followups_id || active.plan!.followups_id,
         answers,
       });
-      setSenseiData(resp);
-      setNotice("Refined. Review the updated cards.");
+
+      updateActive({ plan: resp, followups_id: resp.followups_id });
+      ping("Refined");
     } catch (e: any) {
-      setError(e?.message ?? "Sensei refine failed.");
+      setError(e?.message ?? "Refine failed.");
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   }
 
-  function handleReset() {
-    setSenseiData(null);
-    setAnswersText("");
+  async function askInSection() {
+    if (!user) {
+      setError("Sign in to chat.");
+      return;
+    }
+    if (!active?.followups_id) {
+      setError("Generate a camp first.");
+      return;
+    }
+    const q = askText.trim();
+    if (!q) return;
+
+    const msgUser: Msg = { id: uid(), from: "user", text: q, ts: Date.now() };
+    updateActive({
+      chats: { ...active.chats, [activeSection]: [...active.chats[activeSection], msgUser] },
+    });
+    setAskText("");
+    setBusy(true);
     setError(null);
-    setNotice(null);
-    if (typeof window !== "undefined") window.localStorage.removeItem(SENSEI_STORAGE_KEY);
+
+    try {
+      const resp = await postJson<{ ok: true; reply: string }>("/api/sensei", {
+        mode: "ask",
+        followups_id: active.followups_id,
+        section_id: activeSection,
+        question: q,
+        week: active.week,
+        context,
+      });
+
+      const msgSensei: Msg = { id: uid(), from: "sensei", text: resp.reply, ts: Date.now() };
+      const next = [...active.chats[activeSection], msgUser, msgSensei];
+
+      updateActive({
+        chats: { ...active.chats, [activeSection]: next },
+      });
+    } catch (e: any) {
+      setError(e?.message ?? "Chat failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!authLoading && !user) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-50 px-6 py-10">
+        <div className="max-w-6xl mx-auto rounded-3xl border border-slate-800 bg-slate-900/40 p-8">
+          <p className="text-sm font-semibold">You’re not logged in.</p>
+          <p className="mt-2 text-xs text-slate-400">
+            Sign in first, then you can create and save multiple camps.
+          </p>
+          <a className="underline text-emerald-300" href="/auth/login">Go to login</a>
+        </div>
+      </main>
+    );
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-50 px-6 py-12 md:px-16">
-      <div className="max-w-6xl mx-auto space-y-10">
-        <section className="space-y-3">
-          <p className="text-xs font-semibold tracking-[0.25em] text-emerald-400">SENSEI AI</p>
-          <h1 className="text-3xl md:text-4xl font-semibold">
-            Overview → Training → Nutrition → Recovery → Questions
-          </h1>
-          <p className="text-sm md:text-base text-slate-300 max-w-2xl">
-            Same detail, cleaner structure. Each section is carded and subtopics are highlighted.
-          </p>
-        </section>
-
-        {!authLoading && !user && (
-          <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
-            You must be signed in to use Sensei.{" "}
-            <a href="/auth/login" className="underline">Go to login</a>
+    <main className="min-h-screen bg-slate-950 text-slate-50 px-6 py-10">
+      <div className="max-w-6xl mx-auto grid gap-6 md:grid-cols-[320px_1fr]">
+        {/* LEFT: thread list */}
+        <aside className="rounded-3xl border border-slate-800 bg-slate-900/40 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold tracking-[0.25em] text-emerald-400">CAMPS</p>
+            <button
+              onClick={createThread}
+              className="rounded-full bg-emerald-400 px-3 py-1.5 text-xs font-semibold text-slate-950"
+            >
+              New
+            </button>
           </div>
-        )}
 
-        <section className="grid gap-6 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1.1fr)] items-start">
-          {/* LEFT: inputs */}
-          <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6 md:p-8 space-y-6">
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Your style" value={style} onChange={setStyle} />
-              <Field label="Closest fighters" value={favourites} onChange={setFavourites} />
-              <Field label="Week label" value={week} onChange={setWeek} placeholder="Week 1 / Week 2 / Fight Week" />
-              <Field label="Weight goal" value={weightGoal} onChange={setWeightGoal} placeholder="cut/bulk/maintain" />
-            </div>
-
+          {threads.length === 0 ? (
+            <p className="text-xs text-slate-400">No camps yet. Create one.</p>
+          ) : (
             <div className="space-y-2">
-              <label className="block text-xs font-medium text-slate-300">Scenario / problem</label>
-              <textarea
-                className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-emerald-400 min-h-[140px]"
-                value={scenario}
-                onChange={(e) => setScenario(e.target.value)}
-                placeholder="Injuries, schedule, goals, constraints."
-              />
+              {threads.map((t) => {
+                const activeRow = t.id === activeId;
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => setActiveId(t.id)}
+                    className={cn(
+                      "w-full text-left rounded-2xl border p-3 transition",
+                      activeRow
+                        ? "border-emerald-500/40 bg-emerald-500/10"
+                        : "border-slate-800 bg-slate-950/40 hover:border-emerald-400/40"
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold truncate">{t.title}</p>
+                        <p className="text-[11px] text-slate-400">
+                          {t.plan ? "Generated" : "Draft"} · {new Date(t.createdAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            renameThread(t.id);
+                          }}
+                          className="text-[11px] text-slate-300 underline"
+                        >
+                          Rename
+                        </span>
+                        <span
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            deleteThread(t.id);
+                          }}
+                          className="text-[11px] text-red-300 underline"
+                        >
+                          Delete
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
+          )}
+        </aside>
 
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                onClick={handleGenerate}
-                disabled={!canRun}
-                className="rounded-full bg-emerald-400 px-6 py-2 text-sm font-semibold text-slate-950 disabled:opacity-60"
-              >
-                {loading ? "Generating…" : "Generate camp"}
-              </button>
-
-              <button
-                type="button"
-                onClick={handleRefine}
-                disabled={!canRun || !senseiData}
-                className="rounded-full border border-slate-600 px-4 py-2 text-xs font-medium text-slate-200 hover:border-slate-400 disabled:opacity-40"
-              >
-                Refine
-              </button>
-
-              <button
-                type="button"
-                onClick={handleReset}
-                className="rounded-full border border-slate-700 px-4 py-2 text-xs font-medium text-slate-300 hover:border-slate-400"
-              >
-                Reset
-              </button>
-            </div>
-
-            {error && <p className="text-xs text-red-400">Sensei error: {error}</p>}
-            {!error && notice && <p className="text-xs text-emerald-300">{notice}</p>}
-          </div>
-
-          {/* RIGHT: carded output + refine answers */}
-          <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6 md:p-8 space-y-4">
-            <h2 className="text-xs font-semibold tracking-[0.18em] text-slate-300">CAMP CARDS</h2>
-
-            {senseiData ? (
-              <>
-                <SenseiCards data={senseiData} />
-
-                <div className="pt-2">
-                  <label className="block text-xs font-medium text-slate-300">
-                    Answer Questions (one line per answer), then refine
-                  </label>
-                  <textarea
-                    className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs md:text-sm outline-none focus:border-emerald-400"
-                    value={answersText}
-                    onChange={(e) => setAnswersText(e.target.value)}
-                    rows={3}
-                    placeholder="1) I did 2 sessions above 8/10 intensity&#10;2) Sleep averaged 6.5h"
-                  />
-                </div>
-              </>
-            ) : (
-              <p className="text-sm text-slate-400">
-                Generate a camp to see the 5 highlighted sections.
+        {/* RIGHT: active camp */}
+        <section className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6 space-y-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold tracking-[0.25em] text-emerald-400">SENSEI</p>
+              <h1 className="mt-2 text-2xl font-semibold">{active?.title ?? "Select a camp"}</h1>
+              <p className="mt-1 text-xs text-slate-400">
+                Multiple saved camps · per-section questions · refine when needed
               </p>
+            </div>
+            {toast && (
+              <span className="text-[11px] px-3 py-1 rounded-full border border-slate-700 bg-slate-950/50 text-slate-200">
+                {toast}
+              </span>
             )}
           </div>
+
+          {error && <p className="text-xs text-red-300">Sensei error: {error}</p>}
+
+          {!active ? (
+            <p className="text-sm text-slate-400">Create or select a camp on the left.</p>
+          ) : (
+            <>
+              {/* Inputs */}
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">Week label</label>
+                  <input
+                    value={active.week}
+                    onChange={(e) => updateActive({ week: e.target.value })}
+                    className="w-full rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-sm outline-none focus:border-emerald-400/50"
+                    placeholder="Week 1 / Week 2 / Fight Week"
+                  />
+                </div>
+                <div />
+              </div>
+
+              <div>
+                <label className="block text-[11px] text-slate-400 mb-1">Scenario / problem</label>
+                <textarea
+                  value={active.scenario}
+                  onChange={(e) => updateActive({ scenario: e.target.value })}
+                  rows={4}
+                  className="w-full rounded-2xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-sm outline-none focus:border-emerald-400/50"
+                  placeholder="What do you want from this phase? Injuries, schedule, constraints, goals."
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  disabled={busy}
+                  onClick={generateCamp}
+                  className={cn(
+                    "rounded-full px-5 py-2 text-sm font-semibold",
+                    busy ? "bg-white/10 text-white/40" : "bg-emerald-400 text-slate-950 hover:bg-emerald-300"
+                  )}
+                >
+                  {busy ? "Working…" : "Generate camp"}
+                </button>
+
+                <button
+                  disabled={busy || !active.plan}
+                  onClick={refineCamp}
+                  className={cn(
+                    "rounded-full px-5 py-2 text-sm font-semibold border",
+                    busy || !active.plan
+                      ? "border-white/10 text-white/40"
+                      : "border-emerald-400/40 text-emerald-200 hover:border-emerald-300"
+                  )}
+                >
+                  Refine
+                </button>
+              </div>
+
+              {/* Plan cards */}
+              {active.plan ? (
+                <>
+                  <SenseiCards data={active.plan} />
+
+                  {/* Section chat tabs */}
+                  <div className="flex flex-wrap gap-2 pt-2">
+                    {(Object.keys(SECTION_LABELS) as SectionId[]).map((sid) => {
+                      const on = sid === activeSection;
+                      return (
+                        <button
+                          key={sid}
+                          onClick={() => setActiveSection(sid)}
+                          className={cn(
+                            "rounded-full px-3 py-1 text-xs border transition",
+                            on
+                              ? "border-emerald-400 bg-emerald-500/10 text-emerald-200"
+                              : "border-slate-800 bg-slate-950/40 text-slate-300 hover:border-emerald-400/50"
+                          )}
+                        >
+                          {SECTION_LABELS[sid]}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Per-section chat */}
+                  <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 space-y-3">
+                    <p className="text-xs text-slate-400">
+                      Ask a question about: <span className="text-emerald-200 font-semibold">{SECTION_LABELS[activeSection]}</span>
+                    </p>
+
+                    <div className="max-h-56 overflow-auto space-y-2">
+                      {(active.chats[activeSection] ?? []).length === 0 ? (
+                        <p className="text-xs text-slate-500">No messages yet.</p>
+                      ) : (
+                        active.chats[activeSection].map((m) => (
+                          <div
+                            key={m.id}
+                            className={cn(
+                              "rounded-2xl px-4 py-2 text-xs border whitespace-pre-wrap",
+                              m.from === "user"
+                                ? "border-slate-700 bg-slate-900/60 text-slate-100"
+                                : "border-emerald-500/30 bg-emerald-500/10 text-emerald-100"
+                            )}
+                          >
+                            <span className="block text-[10px] uppercase tracking-wide opacity-70 mb-1">
+                              {m.from === "user" ? "You" : "Sensei"}
+                            </span>
+                            {m.text}
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    <textarea
+                      value={askText}
+                      onChange={(e) => setAskText(e.target.value)}
+                      rows={2}
+                      className="w-full rounded-2xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-sm outline-none focus:border-emerald-400/50"
+                      placeholder="Ask a precise question…"
+                    />
+
+                    <div className="flex justify-end">
+                      <button
+                        disabled={busy || !askText.trim()}
+                        onClick={askInSection}
+                        className={cn(
+                          "rounded-full px-5 py-2 text-sm font-semibold",
+                          busy || !askText.trim()
+                            ? "bg-white/10 text-white/40"
+                            : "bg-white text-black hover:bg-white/90"
+                        )}
+                      >
+                        Ask
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Refine answers (separate) */}
+                  <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                    <p className="text-xs text-slate-400 mb-2">
+                      Refine answers (one line per answer), then press Refine
+                    </p>
+                    <textarea
+                      value={answersText}
+                      onChange={(e) => setAnswersText(e.target.value)}
+                      rows={3}
+                      className="w-full rounded-2xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-sm outline-none focus:border-emerald-400/50"
+                      placeholder="1) I can train 4x/week\n2) Knee is fully recovered"
+                    />
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-slate-400">Generate a camp to unlock the 5-section map + section chat.</p>
+              )}
+            </>
+          )}
         </section>
       </div>
     </main>
-  );
-}
-
-function Field({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-}) {
-  return (
-    <div className="space-y-2">
-      <label className="block text-xs font-medium text-slate-300">{label}</label>
-      <input
-        className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-emerald-400"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-      />
-    </div>
   );
 }
