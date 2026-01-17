@@ -1,11 +1,8 @@
 // src/app/api/gyms/near/route.ts
 import { NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+
 export const dynamic = "force-dynamic";
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
 
 type GymRow = {
   id: string;
@@ -22,7 +19,7 @@ type GymRow = {
 };
 
 function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number) {
-  const R = 6371; // Earth radius (km)
+  const R = 6371;
   const dLat = ((bLat - aLat) * Math.PI) / 180;
   const dLng = ((bLng - aLng) * Math.PI) / 180;
   const la1 = (aLat * Math.PI) / 180;
@@ -35,15 +32,12 @@ function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-// simple scoring: grind + distance (we’ll plug fighter profile later)
 function scoreGym(gym: GymRow, distanceKm: number): number {
   let score = 0;
 
-  // grind
   if (gym.grind_score >= 4) score += 30;
   else if (gym.grind_score === 3) score += 15;
 
-  // distance bonus
   if (distanceKm < 2) score += 30;
   else if (distanceKm < 5) score += 20;
   else if (distanceKm < 10) score += 10;
@@ -52,6 +46,25 @@ function scoreGym(gym: GymRow, distanceKm: number): number {
 }
 
 export async function GET(req: NextRequest) {
+  // ✅ Lazy init + env guard (prevents build-time crash)
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !/^https?:\/\//.test(url)) {
+    return new Response(JSON.stringify({ gyms: [], error: "Invalid SUPABASE URL" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  if (!serviceKey) {
+    return new Response(JSON.stringify({ gyms: [], error: "Missing SUPABASE service key" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const supabase = createClient(url, serviceKey);
+
   const { searchParams } = new URL(req.url);
   const lat = parseFloat(searchParams.get("lat") || "");
   const lng = parseFloat(searchParams.get("lng") || "");
@@ -86,13 +99,8 @@ export async function GET(req: NextRequest) {
 
   gymsWithScore.sort((a, b) => b.matchScore - a.matchScore);
 
-  return new Response(
-    JSON.stringify({
-      gyms: gymsWithScore,
-    }),
-    {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
+  return new Response(JSON.stringify({ gyms: gymsWithScore }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
 }
