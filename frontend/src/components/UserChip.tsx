@@ -7,33 +7,27 @@ import type { User } from "@supabase/supabase-js";
 import { supabaseBrowser } from "../lib/supabase/browser";
 
 type UserChipProps = {
-  loginHref?: string; // where Guest should go
+  loginHref?: string;
 };
 
-function pickBestName(user: User): string {
+function bestLabel(user: User): string {
   const md: any = user.user_metadata ?? {};
 
-  // Common providers:
-  // Google: full_name, name, picture
-  // Others: preferred_username, username, etc.
-  const candidates = [
-    md.full_name,
-    md.name,
-    md.preferred_username,
-    md.username,
-    md.display_name,
-  ]
-    .filter(Boolean)
-    .map((s: any) => String(s).trim())
-    .filter((s: string) => s.length > 0);
+  const candidate =
+    md.full_name ||
+    md.name ||
+    md.display_name ||
+    md.preferred_username ||
+    md.username;
 
-  if (candidates.length > 0) return candidates[0];
+  if (candidate && String(candidate).trim().length > 0) {
+    return String(candidate).trim();
+  }
 
   if (user.email && user.email.includes("@")) {
     return user.email.split("@")[0];
   }
 
-  // last resort: short uid
   return user.id ? user.id.slice(0, 8) : "User";
 }
 
@@ -42,7 +36,7 @@ export default function UserChip({ loginHref = "/auth" }: UserChipProps) {
   const supabase = useMemo(() => supabaseBrowser(), []);
 
   const [user, setUser] = useState<User | null>(null);
-  const [label, setLabel] = useState<string>("…");
+  const [label, setLabel] = useState("…");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -51,7 +45,7 @@ export default function UserChip({ loginHref = "/auth" }: UserChipProps) {
     async function boot() {
       setLoading(true);
 
-      // 1) FAST: read session from storage/cookies
+      // Use getSession first (fast + reliable)
       const { data: sessionData } = await supabase.auth.getSession();
       const sessionUser = sessionData.session?.user ?? null;
 
@@ -59,22 +53,20 @@ export default function UserChip({ loginHref = "/auth" }: UserChipProps) {
 
       if (sessionUser) {
         setUser(sessionUser);
-        setLabel(pickBestName(sessionUser));
+        setLabel(bestLabel(sessionUser));
         setLoading(false);
 
-        // 2) OPTIONAL verify: getUser() confirms token still valid
-        // (If it fails, we gracefully fall back to sessionUser)
+        // Verify user in background
         supabase.auth.getUser().then(({ data }) => {
           if (!mounted) return;
           const verified = data.user ?? sessionUser;
           setUser(verified);
-          setLabel(pickBestName(verified));
+          setLabel(bestLabel(verified));
         });
 
         return;
       }
 
-      // No session
       setUser(null);
       setLabel("Guest");
       setLoading(false);
@@ -83,15 +75,13 @@ export default function UserChip({ loginHref = "/auth" }: UserChipProps) {
     boot();
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      const nextUser = session?.user ?? null;
-      setUser(nextUser);
-
-      if (!nextUser) {
+      const u = session?.user ?? null;
+      setUser(u);
+      if (!u) {
         setLabel("Guest");
         return;
       }
-
-      setLabel(pickBestName(nextUser));
+      setLabel(bestLabel(u));
     });
 
     return () => {
