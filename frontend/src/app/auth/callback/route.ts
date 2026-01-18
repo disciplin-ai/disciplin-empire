@@ -1,47 +1,22 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/auth-helpers-nextjs";
+import { supabaseServer } from "../../../lib/supabaseServer";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const requestUrl = new URL(req.url);
-  const code = requestUrl.searchParams.get("code");
-  const origin = requestUrl.origin;
+  const url = new URL(req.url);
+  const code = url.searchParams.get("code");
 
   if (!code) {
-    return NextResponse.redirect(
-      `${origin}/auth?error=${encodeURIComponent("Missing OAuth code")}`
-    );
+    return NextResponse.redirect(new URL("/auth/login", url.origin));
   }
 
-  // ✅ IMPORTANT: match your working Fuel route pattern
-  const cookieStore = await cookies();
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) {
-          return cookieStore.get(name)?.value;
-        },
-        set(name: string, value: string, options: any) {
-          cookieStore.set({ name, value, ...options });
-        },
-        remove(name: string, options: any) {
-          cookieStore.set({ name, value: "", ...options });
-        },
-      } as any,
-    }
-  );
-
-  const { error } = await supabase.auth.exchangeCodeForSession(code);
+  const sb = await supabaseServer();
+  const { error } = await sb.auth.exchangeCodeForSession(code);
 
   if (error) {
-    return NextResponse.redirect(
-      `${origin}/auth?error=${encodeURIComponent(error.message)}`
-    );
+    return NextResponse.redirect(new URL("/auth/login", url.origin));
   }
 
-  // ✅ logged in
-  return NextResponse.redirect(`${origin}/dashboard`);
+  return NextResponse.redirect(new URL("/dashboard", url.origin));
 }
