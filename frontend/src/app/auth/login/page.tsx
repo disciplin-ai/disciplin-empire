@@ -1,16 +1,19 @@
-// src/app/auth/login/page.tsx
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "../../../lib/supabase";
+import { supabaseBrowser } from "../../../lib/supabase/browser"; // <-- use a browser client factory
 
 export default function LoginPage() {
   const router = useRouter();
+  const supabase = supabaseBrowser();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   const [loadingEmail, setLoadingEmail] = useState(false);
   const [loadingGoogle, setLoadingGoogle] = useState(false);
 
@@ -19,18 +22,36 @@ export default function LoginPage() {
     setError(null);
     setLoadingEmail(true);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
       password,
     });
 
-    setLoadingEmail(false);
-
-    if (error) {
-      setError(error.message);
+    if (signInError) {
+      setLoadingEmail(false);
+      setError(signInError.message);
       return;
     }
 
+    // ✅ Critical: ensure session is actually available before navigating
+    const { data, error: sessionError } = await supabase.auth.getSession();
+
+    setLoadingEmail(false);
+
+    if (sessionError) {
+      setError(sessionError.message);
+      return;
+    }
+
+    if (!data.session) {
+      // This should basically never happen if persistence is working;
+      // if it does, it’s almost always cookie/storage blocked or wrong client setup.
+      setError("Signed in, but no session was created. Please retry or use Google login.");
+      return;
+    }
+
+    // ✅ Critical: re-render server components that depend on auth
+    router.refresh();
     router.push("/dashboard");
   };
 
@@ -38,30 +59,29 @@ export default function LoginPage() {
     setError(null);
     setLoadingGoogle(true);
 
-    const { error } = await supabase.auth.signInWithOAuth({
+    const { error: oauthError } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo:
-          typeof window !== "undefined"
-            ? `${window.location.origin}/dashboard`
-            : undefined,
+        // ✅ Must be callback route that exchanges code for session cookie
+        redirectTo: `${window.location.origin}/auth/callback`,
       },
     });
 
     setLoadingGoogle(false);
 
-    if (error) setError(error.message);
+    if (oauthError) setError(oauthError.message);
+    // On success: Google -> /auth/callback?code=... -> exchangeCodeForSession -> /dashboard
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-50">
+    <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-50 px-4">
       <div className="w-full max-w-md rounded-2xl bg-slate-900/80 border border-slate-800 px-8 py-10 shadow-xl">
         <h1 className="text-xl font-semibold">Sign in to DISCIPLIN</h1>
         <p className="mt-2 text-sm text-slate-400">
-          Use the same email you’ll use for Sensei AI and Fuel AI. This links
-          your camp identity.
+          Use the same email you’ll use for Sensei AI and Fuel AI. This links your camp identity.
         </p>
 
+        {/* Google */}
         <button
           onClick={handleGoogleLogin}
           disabled={loadingGoogle}
@@ -70,6 +90,7 @@ export default function LoginPage() {
           {loadingGoogle ? "Connecting…" : "Continue with Google"}
         </button>
 
+        {/* Apple placeholder */}
         <button
           disabled
           className="mt-2 w-full rounded-lg bg-slate-800 text-slate-400 py-2 text-sm font-medium cursor-not-allowed"
@@ -83,11 +104,10 @@ export default function LoginPage() {
           <div className="h-px flex-1 bg-slate-800" />
         </div>
 
+        {/* Email / password */}
         <form onSubmit={handleEmailLogin} className="mt-6 space-y-4">
           <div>
-            <label className="block text-xs font-medium text-slate-400">
-              Email
-            </label>
+            <label className="block text-xs font-medium text-slate-400">Email</label>
             <input
               type="email"
               className="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-emerald-400"
@@ -95,13 +115,12 @@ export default function LoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
+              autoComplete="email"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-400">
-              Password
-            </label>
+            <label className="block text-xs font-medium text-slate-400">Password</label>
             <div className="mt-1 flex items-center rounded-lg bg-slate-950 border border-slate-800 px-3">
               <input
                 type={showPassword ? "text" : "password"}
@@ -109,6 +128,7 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                autoComplete="current-password"
               />
               <button
                 type="button"
@@ -135,10 +155,7 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <p className="mt-4 text-xs text-slate-500">
-          Don’t have an account yet? You can create one while you’re testing
-          directly from Supabase.
-        </p>
+        <p className="mt-4 text-xs text-slate-500" />
       </div>
     </div>
   );
