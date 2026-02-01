@@ -18,7 +18,7 @@ type VisionApiResponse = {
 type ChatMsg = {
   id: string;
   from: "user" | "sensei";
-  text: string;
+  text: string; // ✅ narrative only (reply)
   meta?: {
     grade?: Grade;
     keyFix?: string;
@@ -27,7 +27,7 @@ type ChatMsg = {
   };
 };
 
-const STORAGE_KEY = "disciplin_sensei_vision_chat_v1";
+const STORAGE_KEY = "disciplin_sensei_vision_chat_v2"; // bump to avoid old cached messages
 
 function uid(prefix = "m") {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -77,6 +77,37 @@ async function fileToBase64(file: File) {
   return btoa(bin);
 }
 
+function dedupe(arr: string[]) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const x of arr) {
+    const s = (x ?? "").trim();
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+
+// Defensive: strip accidental section headers if the model ever leaks them into reply
+function stripSectionNoise(text: string) {
+  const lines = (text ?? "").split("\n");
+  const banned = ["GRADE:", "KEY FIX:", "DRILLS:", "QUESTIONS:"];
+  const cleaned: string[] = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) {
+      cleaned.push(line);
+      continue;
+    }
+    if (banned.some((b) => t.toUpperCase().startsWith(b))) continue;
+    cleaned.push(line);
+  }
+  return cleaned.join("\n").trim();
+}
+
 export default function SenseiVisionPage() {
   const [userText, setUserText] = useState("");
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -90,11 +121,11 @@ export default function SenseiVisionPage() {
   const [thinking, setThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // keep last sensei reply text as context
-  const lastSenseiReply = useMemo(() => {
-    const last = [...chat].reverse().find((m) => m.from === "sensei");
-    return last?.text ?? "";
+  const lastSenseiMsg = useMemo(() => {
+    return [...chat].reverse().find((m) => m.from === "sensei") ?? null;
   }, [chat]);
+
+  const lastSenseiReply = lastSenseiMsg?.text ?? "";
 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -111,7 +142,6 @@ export default function SenseiVisionPage() {
       const saved = JSON.parse(raw);
       setUserText(saved.userText ?? "");
       setChat(saved.chat ?? []);
-      // image not persisted (privacy)
     } catch {}
   }, []);
 
@@ -126,18 +156,15 @@ export default function SenseiVisionPage() {
     } catch {}
   }, [userText, chat]);
 
-  // Handle image selection + preview + base64
   async function handlePickFile(file: File | null) {
     if (!file) return;
 
     setImageFile(file);
     setError(null);
 
-    // preview
     const previewUrl = URL.createObjectURL(file);
     setImagePreview(previewUrl);
 
-    // base64 for API
     const b64 = await fileToBase64(file);
     setImageBase64(b64);
   }
@@ -162,7 +189,7 @@ export default function SenseiVisionPage() {
     return data;
   }
 
-  // -------- ANALYZE (first response) --------
+  // -------- ANALYZE --------
   async function handleAnalyze() {
     setError(null);
     if (!canAnalyze) {
@@ -173,7 +200,6 @@ export default function SenseiVisionPage() {
     try {
       setLoading(true);
 
-      // Put user message into chat
       const userMsg: ChatMsg = {
         id: uid("u"),
         from: "user",
@@ -195,37 +221,19 @@ export default function SenseiVisionPage() {
         return;
       }
 
-      // Build a compact “coach-like” message (no giant wall)
-      const parts: string[] = [];
-      if (data.grade) parts.push(`GRADE: ${data.grade.toUpperCase()}`);
-      if (data.reply) parts.push(data.reply.trim());
-      if (data.keyFix) parts.push(`KEY FIX: ${data.keyFix}`);
-      if (data.drills?.length) {
-        parts.push("DRILLS:");
-        for (const d of data.drills) parts.push(`- ${d}`);
-      }
-      if (data.questions?.length) {
-        parts.push("QUESTIONS:");
-        for (const q of data.questions) parts.push(`- ${q}`);
-      }
-
       const senseiMsg: ChatMsg = {
         id: uid("s"),
         from: "sensei",
-        text: parts.join("\n"),
+        text: stripSectionNoise((data.reply ?? "").trim()),
         meta: {
           grade: data.grade,
-          keyFix: data.keyFix,
-          drills: data.drills,
-          questions: data.questions,
+          keyFix: (data.keyFix ?? "").trim() || undefined,
+          drills: dedupe(data.drills ?? []),
+          questions: dedupe(data.questions ?? []),
         },
       };
 
       setChat((prev) => [...prev, senseiMsg]);
-
-      // Optional: clear top inputs after analyze
-      // setUserText("");
-      // removeImage();
     } catch (e: any) {
       console.error(e);
       setError(e?.message ?? "Network error.");
@@ -235,14 +243,13 @@ export default function SenseiVisionPage() {
     }
   }
 
-  // -------- CHAT (follow-ups) --------
+  // -------- CHAT --------
   async function handleChatSend() {
     setError(null);
     const msg = chatInput.trim();
     if (!msg) return;
 
-    // must have some context
-    if (!lastSenseiReply) {
+    if (!lastSenseiMsg) {
       setError("Analyze a frame first so Sensei has context.");
       return;
     }
@@ -253,10 +260,20 @@ export default function SenseiVisionPage() {
 
     try {
       setThinking(true);
+
+      // ✅ Send compact prior (reply + meta) to reduce re-listing
+      const prior = {
+        reply: lastSenseiMsg.text,
+        grade: lastSenseiMsg.meta?.grade,
+        keyFix: lastSenseiMsg.meta?.keyFix,
+        drills: lastSenseiMsg.meta?.drills ?? [],
+        questions: lastSenseiMsg.meta?.questions ?? [],
+      };
+
       const data = await callVision({
         mode: "chat",
-        userText,           // original context stays
-        prior: lastSenseiReply,
+        userText, // original context stays
+        prior,    // structured prior (not a wall of repeated text)
         message: msg,
         localeHint: navigator?.language ?? "en",
       });
@@ -266,30 +283,17 @@ export default function SenseiVisionPage() {
         return;
       }
 
-      const parts: string[] = [];
-      if (data.grade) parts.push(`GRADE: ${data.grade.toUpperCase()}`);
-      if (data.reply) parts.push(data.reply.trim());
-      if (data.keyFix) parts.push(`KEY FIX: ${data.keyFix}`);
-      if (data.drills?.length) {
-        parts.push("DRILLS:");
-        for (const d of data.drills) parts.push(`- ${d}`);
-      }
-      if (data.questions?.length) {
-        parts.push("QUESTIONS:");
-        for (const q of data.questions) parts.push(`- ${q}`);
-      }
-
       setChat((prev) => [
         ...prev,
         {
           id: uid("s2"),
           from: "sensei",
-          text: parts.join("\n"),
+          text: stripSectionNoise((data.reply ?? "").trim()),
           meta: {
             grade: data.grade,
-            keyFix: data.keyFix,
-            drills: data.drills,
-            questions: data.questions,
+            keyFix: (data.keyFix ?? "").trim() || undefined,
+            drills: dedupe(data.drills ?? []),
+            questions: dedupe(data.questions ?? []),
           },
         },
       ]);
@@ -301,7 +305,6 @@ export default function SenseiVisionPage() {
     }
   }
 
-  // Edit/delete last user message (like you requested)
   const lastUserIndex = useMemo(() => {
     for (let i = chat.length - 1; i >= 0; i--) {
       if (chat[i].from === "user") return i;
@@ -331,6 +334,10 @@ export default function SenseiVisionPage() {
     }
   }
 
+  const latestGrade = useMemo(() => {
+    return [...chat].reverse().find((m) => m.from === "sensei")?.meta?.grade;
+  }, [chat]);
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50 px-6 py-10 md:px-16">
       <div className="max-w-6xl mx-auto space-y-6">
@@ -349,7 +356,7 @@ export default function SenseiVisionPage() {
         </section>
 
         <section className="grid gap-6 md:grid-cols-[minmax(0,1.05fr)_minmax(0,1.15fr)] items-start">
-          {/* LEFT: input card */}
+          {/* LEFT */}
           <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6 md:p-8 space-y-5">
             <div className="space-y-2">
               <label className="block text-xs font-medium text-slate-300">
@@ -432,9 +439,8 @@ export default function SenseiVisionPage() {
             {error && <p className="text-xs text-red-400">Sensei Vision error: {error}</p>}
           </div>
 
-          {/* RIGHT: chat card */}
+          {/* RIGHT */}
           <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6 md:p-8 flex flex-col gap-4">
-            {/* Header row */}
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-lg font-semibold">Chat with Sensei Vision</h2>
@@ -444,14 +450,13 @@ export default function SenseiVisionPage() {
               </div>
 
               <div className="flex items-center gap-2">
-                {gradePill([...chat].reverse().find(m => m.from === "sensei")?.meta?.grade)}
+                {gradePill(latestGrade)}
                 <span className="text-[11px] px-3 py-1 rounded-full border border-slate-700 text-slate-300">
                   {thinking ? "Reading…" : "Ready"}
                 </span>
               </div>
             </div>
 
-            {/* Chat window */}
             <div className="rounded-2xl border border-slate-800 bg-slate-950/35 px-3 py-3 h-[520px] overflow-auto space-y-2">
               {chat.length === 0 && (
                 <p className="text-xs text-slate-500">
@@ -477,6 +482,40 @@ export default function SenseiVisionPage() {
                   )}
 
                   <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
+
+                  {/* ✅ Render structured sections only from meta (prevents repetition) */}
+                  {m.from === "sensei" && m.meta && (
+                    <div className="mt-3 space-y-2 text-xs text-emerald-100/90">
+                      {m.meta.keyFix && (
+                        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-2">
+                          <div className="text-[10px] uppercase tracking-wide opacity-70">Key fix</div>
+                          <div className="mt-1">{m.meta.keyFix}</div>
+                        </div>
+                      )}
+
+                      {m.meta.drills?.length ? (
+                        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-2">
+                          <div className="text-[10px] uppercase tracking-wide opacity-70">Drills</div>
+                          <ul className="mt-1 list-disc pl-5 space-y-1">
+                            {m.meta.drills.map((d, i) => (
+                              <li key={i}>{d}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+
+                      {m.meta.questions?.length ? (
+                        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-2">
+                          <div className="text-[10px] uppercase tracking-wide opacity-70">Questions</div>
+                          <ul className="mt-1 list-disc pl-5 space-y-1">
+                            {m.meta.questions.map((q, i) => (
+                              <li key={i}>{q}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
                 </div>
               ))}
 
@@ -490,7 +529,6 @@ export default function SenseiVisionPage() {
               <div ref={chatEndRef} />
             </div>
 
-            {/* Edit/delete last user message */}
             <div className="flex items-center justify-between text-xs text-slate-400">
               <span>Tip: you can edit or delete your last question.</span>
               <div className="flex items-center gap-2">
@@ -513,7 +551,6 @@ export default function SenseiVisionPage() {
               </div>
             </div>
 
-            {/* Chat input */}
             <div className="space-y-2">
               <textarea
                 className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs md:text-sm outline-none focus:border-emerald-400"

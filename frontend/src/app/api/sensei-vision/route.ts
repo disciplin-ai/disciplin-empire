@@ -15,9 +15,36 @@ function safeStr(x: any, max = 8000) {
 }
 
 function detectLanguageHint(localeHint?: string) {
-  // Keep it simple: OpenAI can handle multilingual if we instruct it.
-  // localeHint examples: "en-US", "ru-RU"
   return localeHint ? safeStr(localeHint, 20) : "auto";
+}
+
+// Defensive: if model leaks headings into reply, strip them
+function stripReplyNoise(text: string) {
+  const banned = ["GRADE:", "KEY FIX:", "DRILLS:", "QUESTIONS:"];
+  const lines = (text ?? "").split("\n");
+  return lines
+    .filter((line) => {
+      const t = line.trim().toUpperCase();
+      return !banned.some((b) => t.startsWith(b));
+    })
+    .join("\n")
+    .trim();
+}
+
+// Defensive: dedupe arrays server-side too
+function dedupe(arr: any[], maxLen = 6) {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of Array.isArray(arr) ? arr : []) {
+    const s = safeStr(item, 300).trim();
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+    if (out.length >= maxLen) break;
+  }
+  return out;
 }
 
 export async function POST(req: NextRequest) {
@@ -26,10 +53,16 @@ export async function POST(req: NextRequest) {
 
     const mode: Mode = (body?.mode ?? "analyze") as Mode;
     const userText = safeStr(body?.userText, 4000);
-    const imageBase64 = safeStr(body?.imageBase64, 2_000_000); // large; keep reasonable
-    const prior = safeStr(body?.prior, 8000);
+    const imageBase64 = safeStr(body?.imageBase64, 2_000_000);
     const message = safeStr(body?.message, 2000);
     const localeHint = detectLanguageHint(body?.localeHint);
+
+    // prior can be a string (legacy) or an object (new)
+    const priorRaw = body?.prior ?? "";
+    const prior =
+      typeof priorRaw === "string"
+        ? safeStr(priorRaw, 8000)
+        : safeStr(JSON.stringify(priorRaw), 8000);
 
     if (!userText && !imageBase64 && !message) {
       return NextResponse.json(
@@ -45,18 +78,23 @@ You analyze a SINGLE frame (image) + text context and give practical corrections
 Hard rules:
 - Do NOT replace a real coach. Encourage user to confirm with coach.
 - Safety first: if you see dangerous neck/back/knee positions, warn calmly and scale intensity.
-- Adapt tone to age/level: young competitors can handle firm coaching; older hobbyists get conservative advice.
-- MULTI-LANGUAGE: respond in the same language the user writes in (or locale hint), with clear structure.
+- MULTI-LANGUAGE: respond in the same language the user writes in (or locale hint).
 - Be concise, not essays. Prefer bullets.
 - Always ask 1–3 follow-up questions that improve accuracy.
 
+CRITICAL FORMAT RULES:
+- Output MUST be valid JSON only (no extra text).
+- The "reply" field must NOT include section headers like "GRADE:", "DRILLS:", "QUESTIONS:", or "KEY FIX:".
+- Do NOT list drills/questions/key-fix inside "reply". Those belong ONLY in their dedicated keys.
+- Keep "reply" to 3–8 short bullets max.
+
 Output format MUST be valid JSON with exactly these keys:
 {
-  "reply": string,                // the main breakdown (short, structured)
+  "reply": string,
   "grade": "green" | "yellow" | "red",
-  "keyFix": string,               // one cue
-  "drills": string[],             // 2–5 drills
-  "questions": string[]           // 1–3 clarifying questions
+  "keyFix": string,
+  "drills": string[],
+  "questions": string[]
 }
 
 Grade definitions:
@@ -79,7 +117,6 @@ TASK:
 5) Give a grade (green/yellow/red).
 6) Ask 1–3 questions to confirm details (position/ruleset/intention).
 
-If user mentions a specific elite athlete (e.g., Sadulaev), explain the MECHANICAL difference without hero worship.
 Return JSON only.
 `.trim();
 
@@ -87,33 +124,27 @@ Return JSON only.
 CONTEXT:
 ${userText || "(none)"}
 
-PRIOR SENSEI OUTPUT:
+PRIOR (structured):
 ${prior || "(none)"}
 
 USER MESSAGE:
 ${message || "(none)"}
 
 TASK:
-- Continue coaching based on prior output.
-- Update cue/drills if needed.
-- Ask 1–2 new questions.
+- Continue coaching based on prior.
+- Update key fix/drills/questions if needed (do not repeat identical lists unless necessary).
+- Ask 1–2 new questions if you still lack context.
 Return JSON only.
 `.trim();
 
-    // Build input array for Responses API
-    const input: any[] = [];
-
-    // Combine image + text in one user message when possible (best)
     const content: any[] = [];
 
-    if (mode === "chat") {
-      content.push({ type: "input_text", text: promptChat });
-    } else {
-      content.push({ type: "input_text", text: promptAnalyze });
-    }
+    content.push({
+      type: "input_text",
+      text: mode === "chat" ? promptChat : promptAnalyze,
+    });
 
     if (imageBase64) {
-      // Accept either already-clean base64 or full data URL; normalize lightly
       const dataUrl = imageBase64.startsWith("data:")
         ? imageBase64
         : `data:image/jpeg;base64,${imageBase64}`;
@@ -124,16 +155,14 @@ Return JSON only.
       });
     }
 
-    input.push({ role: "user", content });
-
     const aiRes = await openai.responses.create({
-      model: "gpt-4.1-mini", // strong + fast for vision-ish; swap if you want
+      model: "gpt-4.1-mini",
       input: [
         { role: "system", content: [{ type: "input_text", text: system }] },
-        ...input,
+        { role: "user", content },
       ],
-      max_output_tokens: 2000,
-      temperature: 0.25,
+      max_output_tokens: 1200,
+      temperature: 0.2,
     });
 
     const raw = (aiRes.output_text || "").trim();
@@ -144,12 +173,10 @@ Return JSON only.
       );
     }
 
-    // Parse JSON safely
     let parsed: any;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      // If model returns extra text, attempt to extract JSON block
       const start = raw.indexOf("{");
       const end = raw.lastIndexOf("}");
       if (start >= 0 && end > start) {
@@ -162,11 +189,12 @@ Return JSON only.
       }
     }
 
-    const reply = safeStr(parsed?.reply, 8000);
-    const grade = parsed?.grade;
-    const keyFix = safeStr(parsed?.keyFix, 400);
-    const drills = Array.isArray(parsed?.drills) ? parsed.drills.map((d: any) => safeStr(d, 300)) : [];
-    const questions = Array.isArray(parsed?.questions) ? parsed.questions.map((q: any) => safeStr(q, 300)) : [];
+    const reply = stripReplyNoise(safeStr(parsed?.reply, 8000));
+    const grade = parsed?.grade as any;
+    const keyFix = safeStr(parsed?.keyFix, 400).trim();
+
+    const drills = dedupe(parsed?.drills, 6);
+    const questions = dedupe(parsed?.questions, 4);
 
     return NextResponse.json({
       ok: true,
