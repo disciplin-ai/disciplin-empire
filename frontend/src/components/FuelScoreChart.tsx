@@ -38,8 +38,13 @@ export default function FuelScoreChart({
     );
   }
 
-  const labels = data.map((d) => d.day);
-  const scores = data.map((d) => d.fuel_score);
+  // ✅ FIX: ensure chart is always left → right chronological
+  const sortedData = [...data].sort(
+    (a, b) => new Date(a.day).getTime() - new Date(b.day).getTime()
+  );
+
+  const labels = sortedData.map((d) => d.day);
+  const scores = sortedData.map((d) => d.fuel_score);
 
   const chartData = {
     labels,
