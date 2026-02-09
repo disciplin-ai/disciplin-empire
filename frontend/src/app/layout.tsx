@@ -1,4 +1,3 @@
-// src/app/layout.tsx
 import type { Metadata } from "next";
 import "./globals.css";
 
@@ -24,11 +23,13 @@ export default function RootLayout({
           <ProfileProvider>
             <NutritionProvider>
               <div className="min-h-screen flex flex-col">
-                {/* Top navigation visible on all pages */}
+                {/* Global navigation */}
                 <Navbar />
 
-                {/* Main content */}
-                <main className="pt-16 min-h-screen">{children}</main>
+                {/* Page content */}
+                <main className="pt-16 min-h-screen">
+                  {children}
+                </main>
               </div>
             </NutritionProvider>
           </ProfileProvider>

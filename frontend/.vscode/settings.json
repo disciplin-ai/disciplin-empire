@@ -1,17 +1,42 @@
 {
+  // Ignore false Tailwind warnings
   "css.lint.unknownAtRules": "ignore",
+  "scss.lint.unknownAtRules": "ignore",
+  "less.lint.unknownAtRules": "ignore",
 
+  // Tell VS Code that Tailwind uses PostCSS
   "files.associations": {
-    "*.css": "tailwindcss"
+    "*.css": "postcss"
   },
 
-  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  // Tailwind CSS IntelliSense
+  "tailwindCSS.emmetCompletions": true,
+  "editor.quickSuggestions": {
+    "strings": true
+  },
 
+  // Format using Prettier
+  "editor.formatOnSave": true,
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[javascriptreact]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
   "[typescriptreact]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
-
   "[css]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
-  }
+  },
+
+  // Improve TS imports
+  "typescript.preferences.importModuleSpecifier": "non-relative",
+
+  // Disable duplicate TS validation
+  "javascript.validate.enable": false,
+  "typescript.validate.enable": true
 }
