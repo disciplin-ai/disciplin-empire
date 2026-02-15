@@ -1,3 +1,4 @@
+// src/components/FuelScoreChart.tsx
 "use client";
 
 import { Line } from "react-chartjs-2";
@@ -11,34 +12,19 @@ import {
   Legend,
 } from "chart.js";
 
-ChartJS.register(
-  LineElement,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  Tooltip,
-  Legend
-);
+ChartJS.register(LineElement, CategoryScale, LinearScale, PointElement, Tooltip, Legend);
 
 export type FuelHistoryPoint = {
   day: string;
   fuel_score: number | null;
 };
 
-export default function FuelScoreChart({
-  data,
-}: {
-  data: FuelHistoryPoint[];
-}) {
+export default function FuelScoreChart({ data }: { data: FuelHistoryPoint[] }) {
   if (!data || data.length === 0) {
-    return (
-      <div className="text-slate-400 text-sm italic">
-        No history yet — Fuel Score chart appears after your first analysis.
-      </div>
-    );
+    return <div className="text-white/50 text-xs italic">No history yet.</div>;
   }
 
-  // ✅ FIX: ensure chart is always left → right chronological
+  // Always left → right chronological
   const sortedData = [...data].sort(
     (a, b) => new Date(a.day).getTime() - new Date(b.day).getTime()
   );
@@ -57,29 +43,44 @@ export default function FuelScoreChart({
         tension: 0.35,
         spanGaps: true,
         borderColor: "#34d399",
-        backgroundColor: "rgba(52,211,153,0.15)",
+        backgroundColor: "rgba(52,211,153,0.12)",
+        pointBackgroundColor: "#34d399",
       },
     ],
   };
 
-  const options = {
+  const options: any = {
     responsive: true,
     maintainAspectRatio: false,
     scales: {
-      y: { min: 0, max: 100 },
-      x: { grid: { display: false } },
+      y: {
+        min: 0,
+        max: 100,
+        ticks: { color: "rgba(255,255,255,0.55)", font: { size: 11 } },
+        grid: { color: "rgba(255,255,255,0.06)" },
+      },
+      x: {
+        ticks: { color: "rgba(255,255,255,0.55)", font: { size: 11 } },
+        grid: { display: false },
+      },
     },
     plugins: {
       legend: { display: false },
-      tooltip: { intersect: false },
+      tooltip: {
+        intersect: false,
+        backgroundColor: "rgba(2,8,16,0.95)",
+        borderColor: "rgba(52,211,153,0.25)",
+        borderWidth: 1,
+        titleColor: "rgba(255,255,255,0.9)",
+        bodyColor: "rgba(255,255,255,0.85)",
+        displayColors: false,
+      },
     },
   };
 
   return (
-    <div className="w-full h-56 rounded-xl border border-white/10 bg-slate-950/40 p-4">
-      <div className="mb-2 text-sm font-semibold text-slate-200">
-        Fuel Score Trend
-      </div>
+    <div className="w-full h-56 rounded-2xl border border-white/10 bg-gradient-to-br from-[#061535] via-[#030b18] to-[#020810] p-4">
+      <div className="mb-2 text-sm font-semibold text-white">Fuel Score Trend</div>
       <Line data={chartData} options={options} />
     </div>
   );

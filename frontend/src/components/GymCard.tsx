@@ -1,3 +1,4 @@
+// frontend/src/components/GymCard.tsx
 "use client";
 
 import React from "react";
@@ -6,16 +7,12 @@ export type Gym = {
   id: string;
   name: string;
 
-  // These can be null/undefined from Supabase or your API
   city?: string | null;
   country?: string | null;
   area?: string | null;
   slug?: string | null;
 
-  // optional fields (API may or may not return them)
   address?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
 
   primary_discipline?: string | null;
   disciplines?: string[] | null;
@@ -43,27 +40,40 @@ function buildLocation(gym: Gym) {
 }
 
 export default function GymCard({ gym }: { gym: Gym }) {
-  const tags = (gym.style_tags ?? []).filter(Boolean).slice(0, 4);
-
+  const tags = (gym.style_tags ?? []).filter(Boolean).slice(0, 5);
   const location = buildLocation(gym);
   const discipline = (gym.primary_discipline ?? "Mixed").toString();
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 shadow-[0_10px_30px_rgba(0,0,0,0.25)]">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-lg font-semibold text-white">{gym.name}</h3>
+    <div
+      className={cn(
+        "group relative overflow-hidden rounded-2xl border border-white/10",
+        "bg-white/[0.03] backdrop-blur-xl p-5",
+        "shadow-[0_18px_60px_rgba(0,0,0,0.35)]"
+      )}
+    >
+      {/* subtle emerald glow on hover */}
+      <div
+        className={cn(
+          "pointer-events-none absolute -inset-24 opacity-0 blur-3xl transition duration-500",
+          "group-hover:opacity-100",
+          "bg-[radial-gradient(circle,rgba(16,185,129,0.18),transparent_55%)]"
+        )}
+      />
 
+      <div className="relative flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-lg font-semibold text-white truncate">{gym.name}</h3>
           <div className="mt-1 text-sm text-white/65">{location}</div>
 
           {gym.address ? (
-            <div className="mt-2 text-xs text-white/45">{gym.address}</div>
+            <div className="mt-2 text-xs text-white/45 line-clamp-2">{gym.address}</div>
           ) : null}
         </div>
 
-        <div className="flex flex-col items-end gap-2">
+        <div className="flex flex-col items-end gap-2 shrink-0">
           {gym.is_verified ? (
-            <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">
+            <span className="rounded-full border border-emerald-400/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">
               Verified
             </span>
           ) : (
@@ -78,32 +88,32 @@ export default function GymCard({ gym }: { gym: Gym }) {
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="relative mt-4 flex flex-wrap gap-2">
         {gym.level_label ? (
           <span className="rounded-full border border-white/10 bg-white/[0.02] px-3 py-1 text-xs text-white/70">
-            Level: {gym.level_label}
+            Level: <span className="text-white/85">{gym.level_label}</span>
           </span>
         ) : null}
 
         {gym.price_label ? (
           <span className="rounded-full border border-white/10 bg-white/[0.02] px-3 py-1 text-xs text-white/70">
-            Price: {gym.price_label}
+            Price: <span className="text-white/85">{gym.price_label}</span>
           </span>
         ) : null}
 
         {gym.intensity_label ? (
           <span className="rounded-full border border-white/10 bg-white/[0.02] px-3 py-1 text-xs text-white/70">
-            Intensity: {gym.intensity_label}
+            Intensity: <span className="text-white/85">{gym.intensity_label}</span>
           </span>
         ) : null}
       </div>
 
       {tags.length ? (
-        <div className="mt-3 flex flex-wrap gap-2">
+        <div className="relative mt-3 flex flex-wrap gap-2">
           {tags.map((t) => (
             <span
               key={t}
-              className="rounded-full border border-emerald-500/15 bg-emerald-500/5 px-3 py-1 text-xs text-emerald-200/90"
+              className="rounded-full border border-emerald-400/15 bg-emerald-500/5 px-3 py-1 text-xs text-emerald-200/90"
             >
               {t}
             </span>
@@ -111,13 +121,17 @@ export default function GymCard({ gym }: { gym: Gym }) {
         </div>
       ) : null}
 
-      <div className="mt-5 flex flex-wrap items-center gap-3">
+      <div className="relative mt-5 flex flex-wrap items-center gap-3">
         {gym.google_maps_url ? (
           <a
             href={gym.google_maps_url}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center justify-center rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-black hover:bg-emerald-400"
+            className={cn(
+              "inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold",
+              "bg-emerald-400 text-slate-950 hover:bg-emerald-300 transition",
+              "shadow-[0_12px_30px_rgba(16,185,129,0.18)]"
+            )}
           >
             Open in Google Maps
           </a>
@@ -130,10 +144,7 @@ export default function GymCard({ gym }: { gym: Gym }) {
             href={gym.website}
             target="_blank"
             rel="noreferrer"
-            className={cn(
-              "text-sm text-white/70 underline decoration-white/20 underline-offset-4",
-              "hover:text-white"
-            )}
+            className="text-sm text-white/70 underline decoration-white/20 underline-offset-4 hover:text-emerald-100 hover:decoration-emerald-400/40 transition"
           >
             Website
           </a>
