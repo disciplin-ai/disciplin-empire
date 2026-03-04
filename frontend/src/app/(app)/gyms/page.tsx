@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import GymCard from "../../components/GymCard";
+import GymCard from "../../../components/GymCard";
 
 type Gym = {
   id: string;

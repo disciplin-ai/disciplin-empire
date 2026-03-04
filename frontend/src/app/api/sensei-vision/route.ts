@@ -1,214 +1,530 @@
-// src/app/api/sensei-vision/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
+import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
+type Overlay = {
+  lines?: Array<{ a: [number, number]; b: [number, number]; label?: string; tone?: "good" | "bad" | "neutral" }>;
+  points?: Array<{ p: [number, number]; label?: string; tone?: "good" | "bad" | "neutral" }>;
+};
 
-type Mode = "analyze" | "chat";
+type VisionResult = {
+  ok: true;
 
-function safeStr(x: any, max = 8000) {
-  return String(x ?? "").slice(0, max);
+  errorCode: string;
+  biomechCategory: string;
+  severity: number;
+
+  primaryError: string;
+  smallestCue: string;
+
+  right: string[];
+  wrong: string[];
+
+  hindrance: string;
+
+  drills: string[];
+  safety: string[];
+  questions: string[];
+  tags: string[];
+
+  gradePercent: number;
+
+  overlay: Overlay;
+
+  repetitionCount: number;
+  scoreDelta: number | null;
+};
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
 }
 
-function detectLanguageHint(localeHint?: string) {
-  return localeHint ? safeStr(localeHint, 20) : "auto";
+function safeArr(v: any): string[] {
+  return Array.isArray(v)
+    ? v
+        .map((x) => (typeof x === "string" ? x : String(x)))
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
 }
 
-// Defensive: if model leaks headings into reply, strip them
-function stripReplyNoise(text: string) {
-  const banned = ["GRADE:", "KEY FIX:", "DRILLS:", "QUESTIONS:"];
-  const lines = (text ?? "").split("\n");
-  return lines
-    .filter((line) => {
-      const t = line.trim().toUpperCase();
-      return !banned.some((b) => t.startsWith(b));
-    })
-    .join("\n")
-    .trim();
+function ensureMinDrills(drills: string[]) {
+  const d = (drills || []).filter(Boolean);
+  if (d.length >= 3) return d.slice(0, 6);
+
+  const fallback = [
+    "3×10: win inside tie → angle-step → short snap (no long pull).",
+    "2×2 min: partner sprawls on cue → you re-grip + re-angle immediately (no reset).",
+    "2×3 min: hand-fight rounds — forehead pressure + elbows in, feet always moving.",
+  ];
+  return [...d, ...fallback].slice(0, 6);
 }
 
-// Defensive: dedupe arrays server-side too
-function dedupe(arr: any[], maxLen = 6) {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const item of Array.isArray(arr) ? arr : []) {
-    const s = safeStr(item, 300).trim();
-    if (!s) continue;
-    const key = s.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(s);
-    if (out.length >= maxLen) break;
+function normalizeOverlay(raw: any): Overlay {
+  const linesRaw = Array.isArray(raw?.lines) ? raw.lines : [];
+  const pointsRaw = Array.isArray(raw?.points) ? raw.points : [];
+
+  const normPt = (p: any): [number, number] => {
+    const x = clamp(Number(p?.[0] ?? p?.x ?? 0.5) || 0.5, 0, 1);
+    const y = clamp(Number(p?.[1] ?? p?.y ?? 0.5) || 0.5, 0, 1);
+    return [x, y];
+  };
+
+  const toneOk = (t: any) => (t === "good" || t === "bad" || t === "neutral" ? t : "neutral");
+
+  const lines = linesRaw
+    .map((l: any) => ({
+      a: normPt(l?.a ?? l?.from),
+      b: normPt(l?.b ?? l?.to),
+      label: typeof l?.label === "string" ? l.label.slice(0, 36) : undefined,
+      tone: toneOk(l?.tone),
+    }))
+    .slice(0, 10);
+
+  const points = pointsRaw
+    .map((p: any) => ({
+      p: normPt(p?.p ?? p?.point),
+      label: typeof p?.label === "string" ? p.label.slice(0, 36) : undefined,
+      tone: toneOk(p?.tone),
+    }))
+    .slice(0, 12);
+
+  return { lines, points };
+}
+
+function normalizeVision(raw: any): Omit<VisionResult, "repetitionCount" | "scoreDelta"> {
+  const grade = clamp(Number(raw?.gradePercent ?? 0) || 0, 0, 100);
+
+  const errorCode =
+    typeof raw?.errorCode === "string" && raw.errorCode.trim() ? raw.errorCode.trim().toUpperCase() : "UNKNOWN";
+  const biomechCategory =
+    typeof raw?.biomechCategory === "string" && raw.biomechCategory.trim()
+      ? raw.biomechCategory.trim().toLowerCase()
+      : "unknown";
+  const severity = clamp(Number(raw?.severity ?? 50) || 50, 0, 100);
+
+  const right = safeArr(raw?.right);
+  const wrong = safeArr(raw?.wrong);
+  const drills = ensureMinDrills(safeArr(raw?.drills));
+  const safety = safeArr(raw?.safety);
+  const questions = safeArr(raw?.questions);
+  const tags = safeArr(raw?.tags);
+  const overlay = normalizeOverlay(raw?.overlay ?? raw?.annotations ?? {});
+
+  return {
+    ok: true,
+    errorCode,
+    biomechCategory,
+    severity,
+    primaryError: typeof raw?.primaryError === "string" && raw.primaryError.trim() ? raw.primaryError.trim() : "—",
+    smallestCue: typeof raw?.smallestCue === "string" && raw.smallestCue.trim() ? raw.smallestCue.trim() : "—",
+    right: right.length ? right : ["—"],
+    wrong: wrong.length ? wrong : ["—"],
+    hindrance: typeof raw?.hindrance === "string" && raw.hindrance.trim() ? raw.hindrance.trim() : "—",
+    drills,
+    safety,
+    questions,
+    tags,
+    gradePercent: grade,
+    overlay,
+  };
+}
+
+async function fileToDataUrl(file: File) {
+  const buf = Buffer.from(await file.arrayBuffer());
+  const mime = file.type || "image/png";
+  return `data:${mime};base64,${buf.toString("base64")}`;
+}
+
+function computeRepetitionCount(lastSessions: Array<{ error_code: string }>, currentCode: string): number {
+  let streak = 0;
+  for (const s of lastSessions) {
+    if ((s.error_code || "").toUpperCase() === currentCode.toUpperCase()) streak++;
+    else break;
   }
-  return out;
+  return streak;
 }
 
-export async function POST(req: NextRequest) {
+function computeAdaptiveGrade(baseGrade: number, repetitionStreak: number, prevGrade: number | null) {
+  const repetitionPenalty = repetitionStreak >= 2 ? Math.min(12, (repetitionStreak - 1) * 4) : 0;
+  const delta = prevGrade == null ? null : baseGrade - prevGrade;
+  const improvementBonus = delta != null && delta > 0 ? Math.min(6, Math.floor(delta / 5) * 2) : 0;
+
+  const final = clamp(baseGrade - repetitionPenalty + improvementBonus, 0, 100);
+  return { final, delta };
+}
+
+function supaAdmin() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return null;
+  return createClient(url, key, { auth: { persistSession: false } });
+}
+
+async function getUserIdFromRequest(req: Request): Promise<string | null> {
+  const url = process.env.SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anon) return null;
+
+  const supa = createClient(url, anon, { auth: { persistSession: false } });
+  const authHeader = req.headers.get("authorization");
+  if (!authHeader) return null;
+
+  const token = authHeader.replace("Bearer ", "").trim();
+  if (!token) return null;
+
+  const { data } = await supa.auth.getUser(token);
+  return data?.user?.id ?? null;
+}
+
+function pickOutputText(envelope: any): string {
+  if (typeof envelope?.output_text === "string" && envelope.output_text.trim()) return envelope.output_text.trim();
+
+  if (Array.isArray(envelope?.output)) {
+    const txt = envelope.output
+      .flatMap((o: any) => o?.content || [])
+      .map((c: any) => c?.text)
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    if (txt) return txt;
+  }
+  return "";
+}
+
+/**
+ * IMPORTANT:
+ * In strict json_schema mode with additionalProperties:false,
+ * OpenAI validates that "required" contains EVERY key in "properties".
+ * To keep "optional" fields, we make them nullable and still "required".
+ */
+const ANALYZE_SCHEMA = {
+  name: "sensei_vision_analyze",
+  type: "json_schema",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      errorCode: { type: "string" },
+      biomechCategory: { type: "string" },
+      severity: { type: "number" },
+
+      gradePercent: { type: "number" },
+      primaryError: { type: "string" },
+      smallestCue: { type: "string" },
+
+      right: { type: "array", items: { type: "string" } },
+      wrong: { type: "array", items: { type: "string" } },
+      hindrance: { type: "string" },
+
+      drills: { type: "array", items: { type: "string" } },
+      safety: { type: "array", items: { type: "string" } },
+      questions: { type: "array", items: { type: "string" } },
+      tags: { type: "array", items: { type: "string" } },
+
+      overlay: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          lines: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                a: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2 },
+                b: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2 },
+                label: { type: ["string", "null"] },
+                tone: { type: ["string", "null"], enum: ["good", "bad", "neutral", null] },
+              },
+              required: ["a", "b", "label", "tone"],
+            },
+          },
+          points: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                p: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2 },
+                label: { type: ["string", "null"] },
+                tone: { type: ["string", "null"], enum: ["good", "bad", "neutral", null] },
+              },
+              required: ["p", "label", "tone"],
+            },
+          },
+        },
+        required: ["lines", "points"],
+      },
+    },
+    required: [
+      "errorCode",
+      "biomechCategory",
+      "severity",
+      "gradePercent",
+      "primaryError",
+      "smallestCue",
+      "right",
+      "wrong",
+      "hindrance",
+      "drills",
+      "safety",
+      "questions",
+      "tags",
+      "overlay",
+    ],
+  },
+};
+
+const TIGHTEN_SCHEMA = {
+  name: "sensei_vision_tighten",
+  type: "json_schema",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      reply: { type: "string" },
+    },
+    required: ["reply"],
+  },
+};
+
+async function callOpenAIAnalyze(context: string, dataUrl: string, memory: any) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
+
+  const model = process.env.OPENAI_VISION_MODEL || "gpt-4.1-mini";
+
+  const system = `
+You are Sensei Vision for serious fighters.
+
+Output rules:
+- Output MUST match the provided JSON schema.
+- smallestCue: one sentence, actionable.
+- wrong: 3–6 bullets, concrete.
+- drills: MUST be 3–6 (never empty).
+- overlay coords: normalized 0..1 relative to the image.
+- If the same error repeats, mention it in primaryError OR hindrance.
+- For overlay label/tone, if unknown, use null or "neutral".
+`.trim();
+
+  const input = [
+    { role: "system", content: system },
+    {
+      role: "user",
+      content: [
+        { type: "input_text", text: `Context: ${context}` },
+        { type: "input_text", text: `Memory: ${JSON.stringify(memory).slice(0, 2000)}` },
+        { type: "input_image", image_url: dataUrl },
+      ],
+    },
+  ];
+
+  const r = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      input,
+      temperature: 0.2,
+      max_output_tokens: 900,
+      text: { format: ANALYZE_SCHEMA },
+    }),
+  });
+
+  const rawText = await r.text();
+  if (!r.ok) throw new Error(`OpenAI error (${r.status}): ${rawText.slice(0, 600)}`);
+
+  const envelope = JSON.parse(rawText);
+  const outText = pickOutputText(envelope);
+  if (!outText) throw new Error("OpenAI returned empty output_text");
+
+  const parsed = JSON.parse(outText);
+  return normalizeVision(parsed);
+}
+
+async function callOpenAITighten(question: string, lastResult: any, memory: any) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
+
+  const model = process.env.OPENAI_TEXT_MODEL || "gpt-4.1-mini";
+
+  const system = `
+You are Sensei Tighten.
+
+Output rules:
+- Output MUST match the provided JSON schema: { "reply": string }
+- 2–6 lines max.
+- NEVER restate the user question.
+- No fluff. No hype.
+- If multiple variables, force ONE variable and give the next sharp question.
+`.trim();
+
+  const user = `
+Last analysis:
+${JSON.stringify(lastResult).slice(0, 2500)}
+
+Memory:
+${JSON.stringify(memory).slice(0, 2000)}
+
+User question:
+${question}
+`.trim();
+
+  const r = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      input: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      temperature: 0.2,
+      max_output_tokens: 220,
+      text: { format: TIGHTEN_SCHEMA },
+    }),
+  });
+
+  const rawText = await r.text();
+  if (!r.ok) throw new Error(`OpenAI tighten error (${r.status}): ${rawText.slice(0, 600)}`);
+
+  const envelope = JSON.parse(rawText);
+  const outText = pickOutputText(envelope);
+  if (!outText) throw new Error("OpenAI returned empty output_text");
+
+  const parsed = JSON.parse(outText);
+  return { reply: typeof parsed?.reply === "string" ? parsed.reply : "Pick ONE variable. Ask again." };
+}
+
+function progressionDrills(baseDrills: string[], repetitionStreak: number, delta: number | null) {
+  const drills = [...baseDrills];
+
+  if (repetitionStreak >= 2) {
+    drills.unshift("REGRESS: 3×8 — angle-step only. No snap. Win position first.");
+  } else if (delta != null && delta >= 8) {
+    drills.unshift("PROGRESS: 3×2 min — live tie-ups into snap/shot chain (no reset).");
+  } else if (delta != null && delta > 0) {
+    drills.unshift("STABILIZE: 2×2 min — tempo reps (slow entry, fast cue).");
+  }
+
+  return drills.slice(0, 6);
+}
+
+export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const contentType = req.headers.get("content-type") || "";
 
-    const mode: Mode = (body?.mode ?? "analyze") as Mode;
-    const userText = safeStr(body?.userText, 4000);
-    const imageBase64 = safeStr(body?.imageBase64, 2_000_000);
-    const message = safeStr(body?.message, 2000);
-    const localeHint = detectLanguageHint(body?.localeHint);
+    // Tighten JSON
+    if (contentType.includes("application/json")) {
+      const body = await req.json().catch(() => ({}));
+      if (String(body?.mode || "").trim() !== "tighten") {
+        return NextResponse.json({ error: "Invalid request (expected {mode:'tighten'})" }, { status: 400 });
+      }
 
-    // prior can be a string (legacy) or an object (new)
-    const priorRaw = body?.prior ?? "";
-    const prior =
-      typeof priorRaw === "string"
-        ? safeStr(priorRaw, 8000)
-        : safeStr(JSON.stringify(priorRaw), 8000);
+      const question = String(body?.question || "").trim();
+      const lastResult = body?.lastResult || null;
 
-    if (!userText && !imageBase64 && !message) {
+      if (!question) return NextResponse.json({ error: "Missing question" }, { status: 400 });
+      if (!lastResult) return NextResponse.json({ error: "Missing lastResult" }, { status: 400 });
+
+      const userId = await getUserIdFromRequest(req);
+      const admin = supaAdmin();
+
+      let memory: any = {};
+      if (userId && admin) {
+        const { data } = await admin
+          .from("sensei_vision_sessions")
+          .select("created_at,error_code,grade_percent,severity,biomech_category")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(6);
+
+        memory = { recentSessions: data ?? [] };
+      }
+
+      const out = await callOpenAITighten(question, lastResult, memory);
+      return NextResponse.json(out);
+    }
+
+    // Analyze multipart
+    if (!contentType.includes("multipart/form-data")) {
       return NextResponse.json(
-        { ok: false, error: "Missing input for Sensei Vision." },
+        { error: "Invalid request (expected multipart/form-data analyze or JSON tighten)" },
         { status: 400 }
       );
     }
 
-    const system = `
-You are SENSEI VISION — a strict but responsible martial-arts technique coach.
-You analyze a SINGLE frame (image) + text context and give practical corrections.
+    const form = await req.formData();
+    const context = String(form.get("context") || "").trim();
+    const image = form.get("image");
 
-Hard rules:
-- Do NOT replace a real coach. Encourage user to confirm with coach.
-- Safety first: if you see dangerous neck/back/knee positions, warn calmly and scale intensity.
-- MULTI-LANGUAGE: respond in the same language the user writes in (or locale hint).
-- Be concise, not essays. Prefer bullets.
-- Always ask 1–3 follow-up questions that improve accuracy.
+    if (!context) return NextResponse.json({ error: "Missing context" }, { status: 400 });
+    if (!(image instanceof File)) return NextResponse.json({ error: "Missing image (field 'image')" }, { status: 400 });
 
-CRITICAL FORMAT RULES:
-- Output MUST be valid JSON only (no extra text).
-- The "reply" field must NOT include section headers like "GRADE:", "DRILLS:", "QUESTIONS:", or "KEY FIX:".
-- Do NOT list drills/questions/key-fix inside "reply". Those belong ONLY in their dedicated keys.
-- Keep "reply" to 3–8 short bullets max.
+    const dataUrl = await fileToDataUrl(image);
 
-Output format MUST be valid JSON with exactly these keys:
-{
-  "reply": string,
-  "grade": "green" | "yellow" | "red",
-  "keyFix": string,
-  "drills": string[],
-  "questions": string[]
-}
+    const userId = await getUserIdFromRequest(req);
+    const admin = supaAdmin();
 
-Grade definitions:
-- green = technically correct / safe habit
-- yellow = mostly good, needs corrections
-- red = habit that must change (inefficient or risky)
+    let recent: any[] = [];
+    if (userId && admin) {
+      const { data } = await admin
+        .from("sensei_vision_sessions")
+        .select("created_at,error_code,grade_percent,severity,biomech_category")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(7);
 
-Locale hint: ${localeHint}
-`.trim();
+      recent = data ?? [];
+    }
 
-    const promptAnalyze = `
-CONTEXT (user text):
-${userText || "(none)"}
+    const memory = { recentSessions: recent };
 
-TASK:
-1) Read the frame.
-2) Identify the PRIMARY mistake (1–2 lines).
-3) Give the smallest high-leverage fix (one cue).
-4) Give 2–5 drills.
-5) Give a grade (green/yellow/red).
-6) Ask 1–3 questions to confirm details (position/ruleset/intention).
+    const base = await callOpenAIAnalyze(context, dataUrl, memory);
 
-Return JSON only.
-`.trim();
+    const repetitionStreak = computeRepetitionCount(recent as any[], base.errorCode);
+    const prevGrade = recent?.[0]?.grade_percent ?? null;
+    const { final, delta } = computeAdaptiveGrade(
+      base.gradePercent,
+      repetitionStreak,
+      typeof prevGrade === "number" ? prevGrade : null
+    );
 
-    const promptChat = `
-CONTEXT:
-${userText || "(none)"}
+    const drills = progressionDrills(base.drills, repetitionStreak, delta);
 
-PRIOR (structured):
-${prior || "(none)"}
+    const result: VisionResult = {
+      ...base,
+      gradePercent: final,
+      repetitionCount: repetitionStreak,
+      scoreDelta: delta,
+      drills,
+    };
 
-USER MESSAGE:
-${message || "(none)"}
-
-TASK:
-- Continue coaching based on prior.
-- Update key fix/drills/questions if needed (do not repeat identical lists unless necessary).
-- Ask 1–2 new questions if you still lack context.
-Return JSON only.
-`.trim();
-
-    const content: any[] = [];
-
-    content.push({
-      type: "input_text",
-      text: mode === "chat" ? promptChat : promptAnalyze,
-    });
-
-    if (imageBase64) {
-      const dataUrl = imageBase64.startsWith("data:")
-        ? imageBase64
-        : `data:image/jpeg;base64,${imageBase64}`;
-
-      content.push({
-        type: "input_image",
-        image_url: dataUrl,
+    if (userId && admin) {
+      await admin.from("sensei_vision_sessions").insert({
+        user_id: userId,
+        context,
+        error_code: result.errorCode,
+        biomech_category: result.biomechCategory,
+        severity: result.severity,
+        grade_percent: result.gradePercent,
+        repetition_count: result.repetitionCount,
+        cue: result.smallestCue,
+        primary_error: result.primaryError,
+        hindrance: result.hindrance,
+        drills: result.drills,
+        safety: result.safety,
+        tags: result.tags,
+        overlay: result.overlay,
       });
     }
 
-    const aiRes = await openai.responses.create({
-      model: "gpt-4.1-mini",
-      input: [
-        { role: "system", content: [{ type: "input_text", text: system }] },
-        { role: "user", content },
-      ],
-      max_output_tokens: 1200,
-      temperature: 0.2,
-    });
-
-    const raw = (aiRes.output_text || "").trim();
-    if (!raw) {
-      return NextResponse.json(
-        { ok: false, error: "Sensei Vision gave no answer." },
-        { status: 500 }
-      );
-    }
-
-    let parsed: any;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      const start = raw.indexOf("{");
-      const end = raw.lastIndexOf("}");
-      if (start >= 0 && end > start) {
-        parsed = JSON.parse(raw.slice(start, end + 1));
-      } else {
-        return NextResponse.json(
-          { ok: false, error: "Invalid JSON from Sensei Vision." },
-          { status: 500 }
-        );
-      }
-    }
-
-    const reply = stripReplyNoise(safeStr(parsed?.reply, 8000));
-    const grade = parsed?.grade as any;
-    const keyFix = safeStr(parsed?.keyFix, 400).trim();
-
-    const drills = dedupe(parsed?.drills, 6);
-    const questions = dedupe(parsed?.questions, 4);
-
-    return NextResponse.json({
-      ok: true,
-      reply,
-      grade,
-      keyFix,
-      drills,
-      questions,
-    });
-  } catch (err: any) {
-    console.error("[sensei-vision] error:", err);
-    return NextResponse.json(
-      { ok: false, error: err?.message || "Sensei Vision failed." },
-      { status: 500 }
-    );
+    return NextResponse.json(result);
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || "Unknown error" }, { status: 500 });
   }
 }

@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabaseBrowser } from "../../../lib/supabase/browser"; // <-- use a browser client factory
+import { supabaseBrowser } from "../../../../lib/supabase/browser";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -33,7 +33,7 @@ export default function LoginPage() {
       return;
     }
 
-    // ✅ Critical: ensure session is actually available before navigating
+    // Ensure session exists before navigating
     const { data, error: sessionError } = await supabase.auth.getSession();
 
     setLoadingEmail(false);
@@ -44,15 +44,12 @@ export default function LoginPage() {
     }
 
     if (!data.session) {
-      // This should basically never happen if persistence is working;
-      // if it does, it’s almost always cookie/storage blocked or wrong client setup.
       setError("Signed in, but no session was created. Please retry or use Google login.");
       return;
     }
 
-    // ✅ Critical: re-render server components that depend on auth
-    router.refresh();
     router.push("/dashboard");
+    router.refresh();
   };
 
   const handleGoogleLogin = async () => {
@@ -62,7 +59,6 @@ export default function LoginPage() {
     const { error: oauthError } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        // ✅ Must be callback route that exchanges code for session cookie
         redirectTo: `${window.location.origin}/auth/callback`,
       },
     });
@@ -70,7 +66,6 @@ export default function LoginPage() {
     setLoadingGoogle(false);
 
     if (oauthError) setError(oauthError.message);
-    // On success: Google -> /auth/callback?code=... -> exchangeCodeForSession -> /dashboard
   };
 
   return (
@@ -81,7 +76,6 @@ export default function LoginPage() {
           Use the same email you’ll use for Sensei AI and Fuel AI. This links your camp identity.
         </p>
 
-        {/* Google */}
         <button
           onClick={handleGoogleLogin}
           disabled={loadingGoogle}
@@ -90,7 +84,6 @@ export default function LoginPage() {
           {loadingGoogle ? "Connecting…" : "Continue with Google"}
         </button>
 
-        {/* Apple placeholder */}
         <button
           disabled
           className="mt-2 w-full rounded-lg bg-slate-800 text-slate-400 py-2 text-sm font-medium cursor-not-allowed"
@@ -104,7 +97,6 @@ export default function LoginPage() {
           <div className="h-px flex-1 bg-slate-800" />
         </div>
 
-        {/* Email / password */}
         <form onSubmit={handleEmailLogin} className="mt-6 space-y-4">
           <div>
             <label className="block text-xs font-medium text-slate-400">Email</label>
@@ -154,8 +146,6 @@ export default function LoginPage() {
             {loadingEmail ? "Signing in…" : "Sign in"}
           </button>
         </form>
-
-        <p className="mt-4 text-xs text-slate-500" />
       </div>
     </div>
   );

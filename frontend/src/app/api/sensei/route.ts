@@ -1,10 +1,11 @@
-// frontend/src/app/api/sensei/route.ts
+// src/app/api/sensei/route.ts
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { z } from "zod";
+
+// If you use Supabase auth like the old route, keep this.
+// If you DON'T want auth gating, delete the next 2 lines + the auth block below.
 import { supabaseServer } from "../../../lib/supabaseServer";
-import type { SenseiResponse } from "../../../lib/senseiTypes";
-import { senseiJsonSchema } from "../../../lib/senseiTypes";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -12,80 +13,160 @@ export const dynamic = "force-dynamic";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
+/* =========================
+   Request Schemas
+========================= */
+
 const PlanSchema = z.object({
   mode: z.literal("plan"),
-  week: z.string().default("Week 1"),
-  context: z.string().min(1, "Missing context"),
+  week: z.string().optional().default("Today"),
+  context: z.string().min(8, "Missing context"),
   followups_id: z.string().optional(),
 });
 
-const RefineSchema = z.object({
-  mode: z.literal("refine"),
-  week: z.string().default("Week 1"),
-  context: z.string().min(1, "Missing context"),
-  followups_id: z.string().min(1, "Missing followups_id"),
-  answers: z.record(z.string(), z.string()).default({}),
-});
-
-// ✅ NEW: per-section chat
 const AskSchema = z.object({
   mode: z.literal("ask"),
   followups_id: z.string().min(1, "Missing followups_id"),
   section_id: z.enum(["overview", "training", "nutrition", "recovery", "questions"]),
   question: z.string().min(1, "Missing question"),
-  // optional context so Sensei can answer consistently
   week: z.string().optional(),
   context: z.string().optional(),
 });
 
-const ReqSchema = z.union([PlanSchema, RefineSchema, AskSchema]);
+const ReqSchema = z.union([PlanSchema, AskSchema]);
 
-function buildSenseiSystemRules() {
+/* =========================
+   Output JSON Schemas (OpenAI)
+========================= */
+
+function planJsonSchema() {
+  // Strict schema ensures the model returns exactly what your UI can render.
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      followups_id: { type: "string" },
+      weekLabel: { type: "string" },
+      intensityTag: { type: "string", enum: ["LOW", "MODERATE", "HIGH", "MAX"] },
+
+      overview: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            title: { type: "string" },
+            bullets: { type: "array", items: { type: "string" } },
+          },
+          required: ["title", "bullets"],
+        },
+      },
+      training: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            title: { type: "string" },
+            bullets: { type: "array", items: { type: "string" } },
+          },
+          required: ["title", "bullets"],
+        },
+      },
+      nutrition: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            title: { type: "string" },
+            bullets: { type: "array", items: { type: "string" } },
+          },
+          required: ["title", "bullets"],
+        },
+      },
+      recovery: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            title: { type: "string" },
+            bullets: { type: "array", items: { type: "string" } },
+          },
+          required: ["title", "bullets"],
+        },
+      },
+      questions: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            title: { type: "string" },
+            bullets: { type: "array", items: { type: "string" } },
+          },
+          required: ["title", "bullets"],
+        },
+      },
+    },
+    required: ["followups_id", "weekLabel", "intensityTag", "overview", "training", "nutrition", "recovery", "questions"],
+  } as const;
+}
+
+function askJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      reply: { type: "string" },
+    },
+    required: ["reply"],
+  } as const;
+}
+
+/* =========================
+   Prompt Builders
+========================= */
+
+function systemRules() {
   return [
     "You are Sensei AI: a strict MMA coach.",
+    "Return STRICT JSON only (no markdown, no extra text).",
     "Never use markdown symbols (no ##, no **).",
     "Never repeat the user’s full context back to them.",
     "Be decisive. No 'maybe'. No self-corrections.",
+
     "",
-    "Core structure for plans:",
-    "- You must always output exactly 5 sections in this order:",
-    "  1) overview  2) training  3) nutrition  4) recovery  5) questions",
+    "PLAN FORMAT:",
+    "- Output EXACTLY 5 sections: overview, training, nutrition, recovery, questions.",
     "- Each section: 3–6 blocks, each block 1–3 bullets.",
-    "- Each bullet must contain something concrete (numbers/limits/timing/do-avoid).",
+    "- Bullets must be concrete: numbers, timers, reps, limits, do/avoid.",
+    "- Include at least ONE bullet that starts with 'Cost:' in the overview section.",
+    "- Safety must appear in recovery.",
+
     "",
-    "For chat answers:",
-    "- Answer ONLY the asked question.",
-    "- Do NOT restate the whole plan.",
-    "- Provide 3–7 bullets max, actionable and specific.",
+    "ASK FORMAT:",
+    "- Answer ONLY the question.",
+    "- 3–7 bullets max.",
+    "- Concrete steps; no essays; no restating the plan.",
   ].join("\n");
 }
 
-function buildPlanPrompt(args: {
-  week: string;
-  context: string;
-  followups_id: string;
-  mode: "plan" | "refine";
-  answers?: Record<string, string>;
-}) {
-  const { week, context, followups_id, mode, answers } = args;
-
+function buildPlanPrompt(weekLabel: string, followups_id: string, context: string) {
   return [
-    buildSenseiSystemRules(),
+    systemRules(),
     "",
-    `WEEK_LABEL: ${week}`,
+    `WEEK_LABEL: ${weekLabel}`,
     `FOLLOWUPS_ID: ${followups_id}`,
     "",
     "CONTEXT:",
     context.trim(),
     "",
-    mode === "refine"
-      ? [
-          "MODE: refine",
-          "USER ANSWERS (question -> answer):",
-          JSON.stringify(answers ?? {}, null, 2),
-          "TASK: Update the 5 sections using the answers. Keep the same followups_id.",
-        ].join("\n")
-      : ["MODE: plan", "TASK: Produce the 5 sections for this week label using the context."].join("\n"),
+    "TASK:",
+    "- Produce the 5 sections for this session.",
+    "- Keep it tight and executable.",
+    "- Include 'Cost:' as instructed.",
   ].join("\n");
 }
 
@@ -93,17 +174,16 @@ function buildAskPrompt(args: {
   followups_id: string;
   section_id: string;
   question: string;
-  week?: string;
+  weekLabel?: string;
   context?: string;
 }) {
-  const { followups_id, section_id, question, week, context } = args;
+  const { followups_id, section_id, question, weekLabel, context } = args;
 
   return [
-    buildSenseiSystemRules(),
+    systemRules(),
     "",
     `FOLLOWUPS_ID: ${followups_id}`,
-    week ? `WEEK_LABEL: ${week}` : "",
-    "",
+    weekLabel ? `WEEK_LABEL: ${weekLabel}` : "",
     context ? ["CONTEXT (brief):", context.trim(), ""].join("\n") : "",
     `SECTION: ${section_id}`,
     "",
@@ -111,16 +191,46 @@ function buildAskPrompt(args: {
     question.trim(),
     "",
     "TASK:",
-    "- Answer the question ONLY for this section.",
-    "- Provide 3–7 bullets. Concrete, coach-like.",
-    "- No repetition of the entire plan.",
+    "- Answer ONLY the question.",
+    "- 3–7 bullets max.",
+    "- Concrete, coach-like.",
   ]
     .filter(Boolean)
     .join("\n");
 }
 
+/* =========================
+   Response Text Extractor
+========================= */
+
+function getResponseText(resp: any): string {
+  const a = String(resp?.output_text ?? "").trim();
+  if (a) return a;
+
+  const out = resp?.output;
+  if (Array.isArray(out)) {
+    for (const item of out) {
+      const content = item?.content;
+      if (Array.isArray(content)) {
+        for (const c of content) {
+          if (typeof c?.text === "string" && c.text.trim()) return c.text.trim();
+          const tt = c?.content?.[0]?.text;
+          if (typeof tt === "string" && tt.trim()) return tt.trim();
+        }
+      }
+    }
+  }
+  return "";
+}
+
+/* =========================
+   Handler
+========================= */
+
 export async function POST(req: Request) {
   try {
+    // OPTIONAL AUTH (recommended)
+    // If you don't want auth, remove this entire block.
     const sb = await supabaseServer();
     const { data: auth } = await sb.auth.getUser();
     if (!auth?.user) {
@@ -134,14 +244,14 @@ export async function POST(req: Request) {
     }
 
     // -------------------------
-    // ASK MODE (section chat)
+    // ASK
     // -------------------------
     if (parsed.data.mode === "ask") {
       const prompt = buildAskPrompt({
         followups_id: parsed.data.followups_id,
         section_id: parsed.data.section_id,
         question: parsed.data.question,
-        week: parsed.data.week,
+        weekLabel: parsed.data.week,
         context: parsed.data.context,
       });
 
@@ -159,40 +269,28 @@ export async function POST(req: Request) {
             type: "json_schema",
             name: "sensei_ask",
             strict: true,
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                reply: { type: "string" },
-              },
-              required: ["reply"],
-            },
+            schema: askJsonSchema(),
           },
         },
       } as any);
 
-      const raw = String((resp as any).output_text ?? "").trim();
+      const raw = getResponseText(resp);
       if (!raw) return NextResponse.json({ ok: false, error: "Sensei returned empty output." }, { status: 500 });
 
       const out = JSON.parse(raw) as { reply: string };
-      return NextResponse.json({ ok: true, reply: out.reply });
+
+      const reply = String(out.reply ?? "").trim();
+      return NextResponse.json({ ok: true, reply });
     }
 
     // -------------------------
-    // PLAN / REFINE
+    // PLAN
     // -------------------------
-    const followupsId =
-      parsed.data.mode === "plan"
-        ? parsed.data.followups_id ?? crypto.randomUUID()
-        : parsed.data.followups_id;
+    const weekLabel = (parsed.data.week || "Today").trim();
+    const followups_id = parsed.data.followups_id || crypto.randomUUID();
+    const context = parsed.data.context;
 
-    const prompt = buildPlanPrompt({
-      week: parsed.data.week,
-      context: parsed.data.context,
-      followups_id: followupsId,
-      mode: parsed.data.mode,
-      answers: parsed.data.mode === "refine" ? parsed.data.answers : undefined,
-    });
+    const prompt = buildPlanPrompt(weekLabel, followups_id, context);
 
     const resp = await openai.responses.create({
       model: "gpt-5.1",
@@ -206,20 +304,25 @@ export async function POST(req: Request) {
       text: {
         format: {
           type: "json_schema",
-          name: "sensei_response",
-          schema: senseiJsonSchema(),
+          name: "sensei_plan",
           strict: true,
+          schema: planJsonSchema(),
         },
       },
     } as any);
 
-    const raw = String((resp as any).output_text ?? "").trim();
+    const raw = getResponseText(resp);
     if (!raw) return NextResponse.json({ ok: false, error: "Sensei returned empty output." }, { status: 500 });
 
-    const out = JSON.parse(raw) as SenseiResponse;
+    const out = JSON.parse(raw) as any;
+
+    out.followups_id = followups_id;
+    out.weekLabel = weekLabel;
+    if (!out.intensityTag) out.intensityTag = "MODERATE";
+
     return NextResponse.json({ ok: true, ...out });
   } catch (err: any) {
-    console.error("Sensei crashed:", err);
+    console.error("[sensei] crashed:", err);
     return NextResponse.json({ ok: false, error: "Sensei backend crashed." }, { status: 500 });
   }
 }
