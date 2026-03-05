@@ -1,135 +1,198 @@
 // src/lib/pose/poseLandmarker.ts
-// Runs in the browser only (SenseiVisionClient is a client component)
-
 import { FilesetResolver, PoseLandmarker } from "@mediapipe/tasks-vision";
-import type { Overlay } from "@/components/SenseiVisionScreen";
 
-export type PoseLandmark = { x: number; y: number; z?: number; visibility?: number };
-export type PosePacket = {
-  // we keep it small + stable
-  version: 1;
-  landmarks: PoseLandmark[]; // 33 landmarks (single-person)
-  source: "mediapipe";
+/**
+ * IMPORTANT:
+ * - This file is a LIB file (not a React component).
+ * - Do NOT import types from UI components here.
+ * - Keep all pose/overlay types owned by lib so build is stable.
+ */
+
+/* ========================= TYPES ========================= */
+
+export type PoseLandmark = {
+  x: number;
+  y: number;
+  z?: number;
+  visibility?: number;
 };
+
+export type PosePacket = {
+  landmarks: PoseLandmark[]; // normalized (0..1)
+  timestampMs: number;
+  width: number;
+  height: number;
+};
+
+/**
+ * Overlay primitives your UI can render on top of the frame/canvas.
+ * Keep this type here (lib), not inside a component file.
+ */
+export type Overlay =
+  | {
+      kind: "point";
+      id?: string;
+      x: number; // pixels
+      y: number; // pixels
+      label?: string;
+      confidence?: number;
+    }
+  | {
+      kind: "line";
+      id?: string;
+      x1: number; // pixels
+      y1: number; // pixels
+      x2: number; // pixels
+      y2: number; // pixels
+      label?: string;
+      confidence?: number;
+    }
+  | {
+      kind: "box";
+      id?: string;
+      x: number; // pixels (top-left)
+      y: number; // pixels (top-left)
+      w: number; // pixels
+      h: number; // pixels
+      label?: string;
+      confidence?: number;
+    }
+  | {
+      kind: "text";
+      id?: string;
+      x: number; // pixels
+      y: number; // pixels
+      text: string;
+    };
+
+/* ========================= SINGLETON ========================= */
 
 let _pose: PoseLandmarker | null = null;
 let _loading: Promise<PoseLandmarker> | null = null;
 
-const WASM_BASE = "/mediapipe/wasm";                 // you will add these to /public
-const MODEL_URL = "/models/pose_landmarker_lite.task"; // you will add this to /public/models
+type InitArgs = {
+  /**
+   * Provide an explicit model path if you host it yourself.
+   * If omitted, we use MediaPipe's default hosted bundle + a common model.
+   */
+  modelAssetPath?: string;
 
-async function getPoseLandmarker() {
+  /**
+   * If you want to use a different CDN/bundle location for wasm.
+   * Most setups are fine with the default below.
+   */
+  wasmFilesetPath?: string;
+
+  /**
+   * Running mode:
+   * - "IMAGE" for single frame images
+   * - "VIDEO" for video frames with timestamps
+   */
+  runningMode?: "IMAGE" | "VIDEO";
+};
+
+function assertBrowser() {
+  if (typeof window === "undefined") {
+    throw new Error("poseLandmarker can only run in the browser (window is undefined).");
+  }
+}
+
+/* ========================= INIT ========================= */
+
+export async function getPoseLandmarker(args: InitArgs = {}): Promise<PoseLandmarker> {
+  assertBrowser();
+
   if (_pose) return _pose;
   if (_loading) return _loading;
 
   _loading = (async () => {
-    const vision = await FilesetResolver.forVisionTasks(WASM_BASE);
-    const landmarker = await PoseLandmarker.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: MODEL_URL },
-      runningMode: "IMAGE",
+    const wasmFilesetPath =
+      args.wasmFilesetPath ?? "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm";
+
+    const modelAssetPath =
+      args.modelAssetPath ??
+      // Common working model path used in many MediaPipe examples.
+      // You can replace with your own hosted model later.
+      "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+
+    const runningMode = args.runningMode ?? "VIDEO";
+
+    const vision = await FilesetResolver.forVisionTasks(wasmFilesetPath);
+
+    const pose = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath,
+      },
+      runningMode,
+      // tune these later
       numPoses: 1,
+      minPoseDetectionConfidence: 0.5,
+      minPosePresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5,
     });
-    _pose = landmarker;
-    return landmarker;
+
+    _pose = pose;
+    return pose;
   })();
 
   return _loading;
 }
 
-function clamp01(n: number) {
-  if (!Number.isFinite(n)) return 0.5;
-  return Math.max(0, Math.min(1, n));
+export function resetPoseLandmarker() {
+  try {
+    _pose?.close?.();
+  } catch {}
+  _pose = null;
+  _loading = null;
 }
 
-function overlayFromLandmarks(lm: PoseLandmark[]): Overlay {
-  // MediaPipe Pose 33 indices (common subset)
-  const P = {
-    nose: 0,
-    lShoulder: 11,
-    rShoulder: 12,
-    lElbow: 13,
-    rElbow: 14,
-    lWrist: 15,
-    rWrist: 16,
-    lHip: 23,
-    rHip: 24,
-    lKnee: 25,
-    rKnee: 26,
-    lAnkle: 27,
-    rAnkle: 28,
-  };
+/* ========================= DETECT ========================= */
 
-  const pt = (i: number): [number, number] => {
-    const p = lm[i];
-    return [clamp01(p?.x ?? 0.5), clamp01(p?.y ?? 0.5)];
-  };
+export async function detectPoseFromImage(image: ImageBitmap | HTMLImageElement | HTMLCanvasElement | HTMLVideoElement) {
+  const pose = await getPoseLandmarker({ runningMode: "IMAGE" });
 
-  const lines: Overlay["lines"] = [
-    { a: pt(P.lShoulder), b: pt(P.rShoulder), tone: "neutral", label: "Shoulders" },
-    { a: pt(P.lHip), b: pt(P.rHip), tone: "neutral", label: "Hips" },
-
-    { a: pt(P.lShoulder), b: pt(P.lElbow), tone: "neutral" },
-    { a: pt(P.lElbow), b: pt(P.lWrist), tone: "neutral" },
-
-    { a: pt(P.rShoulder), b: pt(P.rElbow), tone: "neutral" },
-    { a: pt(P.rElbow), b: pt(P.rWrist), tone: "neutral" },
-
-    { a: pt(P.lHip), b: pt(P.lKnee), tone: "neutral" },
-    { a: pt(P.lKnee), b: pt(P.lAnkle), tone: "neutral" },
-
-    { a: pt(P.rHip), b: pt(P.rKnee), tone: "neutral" },
-    { a: pt(P.rKnee), b: pt(P.rAnkle), tone: "neutral" },
-
-    { a: pt(P.lShoulder), b: pt(P.lHip), tone: "neutral" },
-    { a: pt(P.rShoulder), b: pt(P.rHip), tone: "neutral" },
-  ];
-
-  const points: Overlay["points"] = [
-    { p: pt(P.nose), tone: "neutral" },
-    { p: pt(P.lShoulder), tone: "neutral" },
-    { p: pt(P.rShoulder), tone: "neutral" },
-    { p: pt(P.lHip), tone: "neutral" },
-    { p: pt(P.rHip), tone: "neutral" },
-    { p: pt(P.lKnee), tone: "neutral" },
-    { p: pt(P.rKnee), tone: "neutral" },
-    { p: pt(P.lAnkle), tone: "neutral" },
-    { p: pt(P.rAnkle), tone: "neutral" },
-  ];
-
-  return { lines, points };
+  const res = pose.detect(image);
+  const lm = res?.landmarks?.[0] ?? [];
+  return lm as PoseLandmark[];
 }
 
-async function fileToImageBitmap(file: File): Promise<ImageBitmap> {
-  const blob = file.slice(0, file.size, file.type);
-  return await createImageBitmap(blob);
+export async function detectPoseFromVideoFrame(args: {
+  video: HTMLVideoElement | HTMLCanvasElement | ImageBitmap;
+  timestampMs: number;
+}) {
+  const pose = await getPoseLandmarker({ runningMode: "VIDEO" });
+
+  // detectForVideo expects a timestamp
+  const res = pose.detectForVideo(args.video, args.timestampMs);
+  const lm = res?.landmarks?.[0] ?? [];
+  return lm as PoseLandmark[];
 }
 
-export async function buildPoseOverlayFromFile(file: File): Promise<{ overlay: Overlay; pose: PosePacket }> {
-  const landmarker = await getPoseLandmarker();
-  const bmp = await fileToImageBitmap(file);
+/* ========================= OVERLAY HELPERS ========================= */
 
-  const res = landmarker.detect(bmp);
-  bmp.close?.();
+/**
+ * Convert normalized landmarks (0..1) into overlay points in pixel space.
+ * Your UI can render these.
+ */
+export function landmarksToOverlays(args: {
+  landmarks: PoseLandmark[];
+  width: number;
+  height: number;
+  withLabels?: boolean;
+}): Overlay[] {
+  const { landmarks, width, height, withLabels } = args;
 
-  const landmarks = res?.landmarks?.[0] as any[] | undefined;
-  if (!landmarks || landmarks.length < 10) {
-    throw new Error("No pose detected in frame.");
+  const overlays: Overlay[] = [];
+  for (let i = 0; i < landmarks.length; i++) {
+    const p = landmarks[i];
+    overlays.push({
+      kind: "point",
+      id: `lm_${i}`,
+      x: p.x * width,
+      y: p.y * height,
+      label: withLabels ? String(i) : undefined,
+      confidence: p.visibility,
+    });
   }
-
-  const packed: PoseLandmark[] = landmarks.map((p: any) => ({
-    x: clamp01(Number(p.x)),
-    y: clamp01(Number(p.y)),
-    z: Number.isFinite(p.z) ? Number(p.z) : undefined,
-    visibility: Number.isFinite(p.visibility) ? Number(p.visibility) : undefined,
-  }));
-
-  const overlay = overlayFromLandmarks(packed);
-
-  const pose: PosePacket = {
-    version: 1,
-    landmarks: packed,
-    source: "mediapipe",
-  };
-
-  return { overlay, pose };
+  return overlays;
 }
