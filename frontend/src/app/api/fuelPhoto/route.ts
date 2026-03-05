@@ -1,3 +1,4 @@
+// src/app/api/fuelPhoto/route.ts
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { z } from "zod";
@@ -6,6 +7,7 @@ import type { FuelOutput } from "../../../lib/fuelTypes";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+export const dynamic = "force-dynamic";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
@@ -67,11 +69,11 @@ function schemaForFuelOutput() {
 function systemRules() {
   return [
     "You are Fuel AI (photo mode) for fighters.",
-    "Output JSON ONLY matching the provided schema.",
-    "Use BOTH the image and meal text.",
+    "Return STRICT JSON only that matches the schema. No markdown. No extra keys.",
+    "Use BOTH the image and the meal text.",
     "Macros MUST be ranges.",
-    "Always include: score + rating + macro_confidence per macro + strict report.",
-    "If portions/ingredients are unclear, ask 1–3 questions instead of guessing with high confidence.",
+    "If portions/ingredients are unclear, ask 1–3 questions instead of pretending confidence.",
+    "Be strict and specific. Short, coach-like report.",
   ].join("\n");
 }
 
@@ -91,18 +93,31 @@ function buildPrompt(ingredients: string, fighter: any, training: any, followups
     ingredients.trim(),
     "",
     "TASK:",
-    "- Ground what you infer from the image: ingredients + rough portions.",
-    "- Output full JSON.",
+    "- Cross-check the meal text against what you can see in the photo.",
+    "- If the photo conflicts with the text, say so in score_reason and lower confidence.",
+    "- Output full JSON matching schema.",
   ].join("\n");
 }
 
-// Node 18+ has global File, but OpenAI files.create wants a File/Blob-like object.
-// We'll create a File from the uploaded bytes.
-async function toNodeFile(file: File) {
-  const bytes = Buffer.from(await file.arrayBuffer());
-  const name = file.name || "meal.jpg";
-  const type = file.type || "image/jpeg";
-  return new File([bytes], name, { type });
+// Reliable extractor for Responses API outputs
+function getResponseText(resp: any): string {
+  const direct = String(resp?.output_text ?? "").trim();
+  if (direct) return direct;
+
+  const out = resp?.output;
+  if (Array.isArray(out)) {
+    for (const item of out) {
+      const content = item?.content;
+      if (Array.isArray(content)) {
+        for (const c of content) {
+          if (typeof c?.text === "string" && c.text.trim()) return c.text.trim();
+          const tt = c?.content?.[0]?.text;
+          if (typeof tt === "string" && tt.trim()) return tt.trim();
+        }
+      }
+    }
+  }
+  return "";
 }
 
 export async function POST(req: Request) {
@@ -134,29 +149,33 @@ export async function POST(req: Request) {
 
     let fighter: any = {};
     let training: any = {};
-    try { fighter = parsed.data.fighter ? JSON.parse(parsed.data.fighter) : {}; } catch {}
-    try { training = parsed.data.training ? JSON.parse(parsed.data.training) : {}; } catch {}
+    try {
+      fighter = parsed.data.fighter ? JSON.parse(parsed.data.fighter) : {};
+    } catch {}
+    try {
+      training = parsed.data.training ? JSON.parse(parsed.data.training) : {};
+    } catch {}
 
     const followupsId = crypto.randomUUID();
 
-    // ✅ Screenshot/webp-safe: upload the file to OpenAI and reference by image_file_id
-    const nodeFile = await toNodeFile(image);
-    const uploaded = await openai.files.create({
-      file: nodeFile as any,
-      purpose: "vision",
-    } as any);
+    // ✅ Convert uploaded File -> base64 data URL (Responses API expects image_url)
+    const ab = await image.arrayBuffer();
+    const base64 = Buffer.from(ab).toString("base64");
+    const mime = image.type || "image/webp";
+    const dataUrl = `data:${mime};base64,${base64}`;
 
     const prompt = buildPrompt(parsed.data.ingredients, fighter, training, followupsId);
 
     const resp = await openai.responses.create({
+      // Use whatever model you want here.
+      // If your account doesn't have gpt-5.1, swap to a vision-capable model you do have.
       model: "gpt-5.1",
       input: [
         {
-          type: "message",
           role: "user",
           content: [
             { type: "input_text", text: prompt },
-            { type: "input_image", image_file_id: (uploaded as any).id },
+            { type: "input_image", image_url: dataUrl }, // ✅ correct
           ],
         },
       ],
@@ -170,12 +189,13 @@ export async function POST(req: Request) {
       },
     } as any);
 
-    const raw = String((resp as any).output_text ?? "").trim();
-    if (!raw) return NextResponse.json({ ok: false, error: "FuelPhoto returned empty output text." }, { status: 500 });
+    const raw = getResponseText(resp);
+    if (!raw) {
+      return NextResponse.json({ ok: false, error: "FuelPhoto returned empty output." }, { status: 500 });
+    }
 
     const out = JSON.parse(raw) as FuelOutput;
 
-    // Persist (match your schema: if you store macros as jsonb, keep as out.macros)
     await sb.from("fuel_reports").insert({
       user_id: user.id,
       mode: "photo",
@@ -193,7 +213,14 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true, ...out });
   } catch (err: any) {
+    const msg =
+      typeof err?.message === "string"
+        ? err.message
+        : typeof err?.toString === "function"
+        ? err.toString()
+        : "FuelPhoto backend crashed.";
+
     console.error("FuelPhoto crashed:", err);
-    return NextResponse.json({ ok: false, error: "FuelPhoto backend crashed." }, { status: 500 });
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }

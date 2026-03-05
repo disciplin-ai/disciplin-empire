@@ -36,6 +36,12 @@ type VisionResult = {
   scoreDelta: number | null;
 };
 
+type PosePacket = {
+  version: 1;
+  source: "mediapipe";
+  landmarks: Array<{ x: number; y: number; z?: number; visibility?: number }>;
+};
+
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
@@ -71,26 +77,77 @@ function normalizeOverlay(raw: any): Overlay {
     return [x, y];
   };
 
-  const toneOk = (t: any) => (t === "good" || t === "bad" || t === "neutral" ? t : "neutral");
-
   const lines = linesRaw
     .map((l: any) => ({
       a: normPt(l?.a ?? l?.from),
       b: normPt(l?.b ?? l?.to),
       label: typeof l?.label === "string" ? l.label.slice(0, 36) : undefined,
-      tone: toneOk(l?.tone),
+      tone: l?.tone === "good" || l?.tone === "bad" || l?.tone === "neutral" ? l.tone : "neutral",
     }))
-    .slice(0, 10);
+    .slice(0, 14);
 
   const points = pointsRaw
     .map((p: any) => ({
       p: normPt(p?.p ?? p?.point),
       label: typeof p?.label === "string" ? p.label.slice(0, 36) : undefined,
-      tone: toneOk(p?.tone),
+      tone: p?.tone === "good" || p?.tone === "bad" || p?.tone === "neutral" ? p.tone : "neutral",
     }))
-    .slice(0, 12);
+    .slice(0, 16);
 
   return { lines, points };
+}
+
+function overlayFromPose(pose: PosePacket): Overlay {
+  const lm = pose?.landmarks || [];
+  const pt = (i: number): [number, number] => {
+    const p = lm[i] || { x: 0.5, y: 0.5 };
+    return [clamp(Number(p.x) || 0.5, 0, 1), clamp(Number(p.y) || 0.5, 0, 1)];
+  };
+
+  // Same connections as client
+  const P = {
+    nose: 0,
+    lShoulder: 11,
+    rShoulder: 12,
+    lElbow: 13,
+    rElbow: 14,
+    lWrist: 15,
+    rWrist: 16,
+    lHip: 23,
+    rHip: 24,
+    lKnee: 25,
+    rKnee: 26,
+    lAnkle: 27,
+    rAnkle: 28,
+  };
+
+  return {
+    lines: [
+      { a: pt(P.lShoulder), b: pt(P.rShoulder), tone: "neutral", label: "Shoulders" },
+      { a: pt(P.lHip), b: pt(P.rHip), tone: "neutral", label: "Hips" },
+      { a: pt(P.lShoulder), b: pt(P.lElbow), tone: "neutral" },
+      { a: pt(P.lElbow), b: pt(P.lWrist), tone: "neutral" },
+      { a: pt(P.rShoulder), b: pt(P.rElbow), tone: "neutral" },
+      { a: pt(P.rElbow), b: pt(P.rWrist), tone: "neutral" },
+      { a: pt(P.lHip), b: pt(P.lKnee), tone: "neutral" },
+      { a: pt(P.lKnee), b: pt(P.lAnkle), tone: "neutral" },
+      { a: pt(P.rHip), b: pt(P.rKnee), tone: "neutral" },
+      { a: pt(P.rKnee), b: pt(P.rAnkle), tone: "neutral" },
+      { a: pt(P.lShoulder), b: pt(P.lHip), tone: "neutral" },
+      { a: pt(P.rShoulder), b: pt(P.rHip), tone: "neutral" },
+    ],
+    points: [
+      { p: pt(P.nose), tone: "neutral" },
+      { p: pt(P.lShoulder), tone: "neutral" },
+      { p: pt(P.rShoulder), tone: "neutral" },
+      { p: pt(P.lHip), tone: "neutral" },
+      { p: pt(P.rHip), tone: "neutral" },
+      { p: pt(P.lKnee), tone: "neutral" },
+      { p: pt(P.rKnee), tone: "neutral" },
+      { p: pt(P.lAnkle), tone: "neutral" },
+      { p: pt(P.rAnkle), tone: "neutral" },
+    ],
+  };
 }
 
 function normalizeVision(raw: any): Omit<VisionResult, "repetitionCount" | "scoreDelta"> {
@@ -178,121 +235,7 @@ async function getUserIdFromRequest(req: Request): Promise<string | null> {
   return data?.user?.id ?? null;
 }
 
-function pickOutputText(envelope: any): string {
-  if (typeof envelope?.output_text === "string" && envelope.output_text.trim()) return envelope.output_text.trim();
-
-  if (Array.isArray(envelope?.output)) {
-    const txt = envelope.output
-      .flatMap((o: any) => o?.content || [])
-      .map((c: any) => c?.text)
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-    if (txt) return txt;
-  }
-  return "";
-}
-
-/**
- * IMPORTANT:
- * In strict json_schema mode with additionalProperties:false,
- * OpenAI validates that "required" contains EVERY key in "properties".
- * To keep "optional" fields, we make them nullable and still "required".
- */
-const ANALYZE_SCHEMA = {
-  name: "sensei_vision_analyze",
-  type: "json_schema",
-  strict: true,
-  schema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      errorCode: { type: "string" },
-      biomechCategory: { type: "string" },
-      severity: { type: "number" },
-
-      gradePercent: { type: "number" },
-      primaryError: { type: "string" },
-      smallestCue: { type: "string" },
-
-      right: { type: "array", items: { type: "string" } },
-      wrong: { type: "array", items: { type: "string" } },
-      hindrance: { type: "string" },
-
-      drills: { type: "array", items: { type: "string" } },
-      safety: { type: "array", items: { type: "string" } },
-      questions: { type: "array", items: { type: "string" } },
-      tags: { type: "array", items: { type: "string" } },
-
-      overlay: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          lines: {
-            type: "array",
-            items: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                a: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2 },
-                b: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2 },
-                label: { type: ["string", "null"] },
-                tone: { type: ["string", "null"], enum: ["good", "bad", "neutral", null] },
-              },
-              required: ["a", "b", "label", "tone"],
-            },
-          },
-          points: {
-            type: "array",
-            items: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                p: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2 },
-                label: { type: ["string", "null"] },
-                tone: { type: ["string", "null"], enum: ["good", "bad", "neutral", null] },
-              },
-              required: ["p", "label", "tone"],
-            },
-          },
-        },
-        required: ["lines", "points"],
-      },
-    },
-    required: [
-      "errorCode",
-      "biomechCategory",
-      "severity",
-      "gradePercent",
-      "primaryError",
-      "smallestCue",
-      "right",
-      "wrong",
-      "hindrance",
-      "drills",
-      "safety",
-      "questions",
-      "tags",
-      "overlay",
-    ],
-  },
-};
-
-const TIGHTEN_SCHEMA = {
-  name: "sensei_vision_tighten",
-  type: "json_schema",
-  strict: true,
-  schema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      reply: { type: "string" },
-    },
-    required: ["reply"],
-  },
-};
-
-async function callOpenAIAnalyze(context: string, dataUrl: string, memory: any) {
+async function callOpenAIAnalyze(context: string, dataUrl: string, memory: any, pose?: PosePacket | null) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
 
@@ -300,15 +243,39 @@ async function callOpenAIAnalyze(context: string, dataUrl: string, memory: any) 
 
   const system = `
 You are Sensei Vision for serious fighters.
+Return STRICT JSON ONLY. No markdown. No extra text.
 
-Output rules:
-- Output MUST match the provided JSON schema.
-- smallestCue: one sentence, actionable.
-- wrong: 3–6 bullets, concrete.
-- drills: MUST be 3–6 (never empty).
-- overlay coords: normalized 0..1 relative to the image.
-- If the same error repeats, mention it in primaryError OR hindrance.
-- For overlay label/tone, if unknown, use null or "neutral".
+Schema:
+{
+  "errorCode": string,
+  "biomechCategory": string,
+  "severity": number,
+
+  "gradePercent": number,
+  "primaryError": string,
+  "smallestCue": string,
+
+  "right": string[],
+  "wrong": string[],
+  "hindrance": string,
+
+  "drills": string[],
+  "safety": string[],
+  "questions": string[],
+  "tags": string[],
+
+  "overlay": {
+    "lines": [{"a":[x,y],"b":[x,y],"label":string,"tone":"good"|"bad"|"neutral"}],
+    "points":[{"p":[x,y],"label":string,"tone":"good"|"bad"|"neutral"}]
+  }
+}
+
+Rules:
+- smallestCue = one sentence, actionable.
+- wrong = 3–6 bullets, concrete.
+- drills MUST be 3–6.
+- overlay coordinates normalized 0..1.
+- If pose landmarks are provided, align feedback with them (do not hallucinate posture opposite to pose).
 `.trim();
 
   const input = [
@@ -318,29 +285,33 @@ Output rules:
       content: [
         { type: "input_text", text: `Context: ${context}` },
         { type: "input_text", text: `Memory: ${JSON.stringify(memory).slice(0, 2000)}` },
+        pose ? { type: "input_text", text: `PoseLandmarks (mediapipe): ${JSON.stringify(pose).slice(0, 3500)}` } : null,
         { type: "input_image", image_url: dataUrl },
-      ],
+      ].filter(Boolean),
     },
   ];
 
   const r = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      input,
-      temperature: 0.2,
-      max_output_tokens: 900,
-      text: { format: ANALYZE_SCHEMA },
-    }),
+    body: JSON.stringify({ model, input, temperature: 0.15, max_output_tokens: 900 }),
   });
 
   const rawText = await r.text();
-  if (!r.ok) throw new Error(`OpenAI error (${r.status}): ${rawText.slice(0, 600)}`);
+  if (!r.ok) throw new Error(`OpenAI error (${r.status}): ${rawText.slice(0, 400)}`);
 
   const envelope = JSON.parse(rawText);
-  const outText = pickOutputText(envelope);
-  if (!outText) throw new Error("OpenAI returned empty output_text");
+  const outText =
+    typeof envelope?.output_text === "string"
+      ? envelope.output_text.trim()
+      : Array.isArray(envelope?.output)
+      ? envelope.output
+          .flatMap((o: any) => o?.content || [])
+          .map((c: any) => c?.text)
+          .filter(Boolean)
+          .join("\n")
+          .trim()
+      : "";
 
   const parsed = JSON.parse(outText);
   return normalizeVision(parsed);
@@ -354,13 +325,14 @@ async function callOpenAITighten(question: string, lastResult: any, memory: any)
 
   const system = `
 You are Sensei Tighten.
+One question. One answer. One variable.
+Return STRICT JSON ONLY: { "reply": string }
 
-Output rules:
-- Output MUST match the provided JSON schema: { "reply": string }
+Rules:
 - 2–6 lines max.
-- NEVER restate the user question.
 - No fluff. No hype.
-- If multiple variables, force ONE variable and give the next sharp question.
+- Reference memory if it matters.
+- If question is vague, force it into ONE variable and give the next sharp question.
 `.trim();
 
   const user = `
@@ -384,20 +356,28 @@ ${question}
         { role: "user", content: user },
       ],
       temperature: 0.2,
-      max_output_tokens: 220,
-      text: { format: TIGHTEN_SCHEMA },
+      max_output_tokens: 250,
     }),
   });
 
   const rawText = await r.text();
-  if (!r.ok) throw new Error(`OpenAI tighten error (${r.status}): ${rawText.slice(0, 600)}`);
+  if (!r.ok) throw new Error(`OpenAI tighten error (${r.status}): ${rawText.slice(0, 400)}`);
 
   const envelope = JSON.parse(rawText);
-  const outText = pickOutputText(envelope);
-  if (!outText) throw new Error("OpenAI returned empty output_text");
+  const outText =
+    typeof envelope?.output_text === "string"
+      ? envelope.output_text.trim()
+      : Array.isArray(envelope?.output)
+      ? envelope.output
+          .flatMap((o: any) => o?.content || [])
+          .map((c: any) => c?.text)
+          .filter(Boolean)
+          .join("\n")
+          .trim()
+      : "";
 
   const parsed = JSON.parse(outText);
-  return { reply: typeof parsed?.reply === "string" ? parsed.reply : "Pick ONE variable. Ask again." };
+  return { reply: typeof parsed?.reply === "string" ? parsed.reply : "Ask one sharper question." };
 }
 
 function progressionDrills(baseDrills: string[], repetitionStreak: number, delta: number | null) {
@@ -452,18 +432,29 @@ export async function POST(req: Request) {
 
     // Analyze multipart
     if (!contentType.includes("multipart/form-data")) {
-      return NextResponse.json(
-        { error: "Invalid request (expected multipart/form-data analyze or JSON tighten)" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid request (expected multipart/form-data analyze or JSON tighten)" }, { status: 400 });
     }
 
     const form = await req.formData();
     const context = String(form.get("context") || "").trim();
     const image = form.get("image");
+    const poseRaw = form.get("pose"); // OPTIONAL now
 
     if (!context) return NextResponse.json({ error: "Missing context" }, { status: 400 });
     if (!(image instanceof File)) return NextResponse.json({ error: "Missing image (field 'image')" }, { status: 400 });
+
+    let pose: PosePacket | null = null;
+    if (typeof poseRaw === "string" && poseRaw.trim()) {
+      try {
+        const parsed = JSON.parse(poseRaw);
+        if (parsed?.version === 1 && parsed?.source === "mediapipe" && Array.isArray(parsed?.landmarks)) {
+          pose = parsed as PosePacket;
+        }
+      } catch {
+        // ignore malformed pose
+        pose = null;
+      }
+    }
 
     const dataUrl = await fileToDataUrl(image);
 
@@ -484,20 +475,20 @@ export async function POST(req: Request) {
 
     const memory = { recentSessions: recent };
 
-    const base = await callOpenAIAnalyze(context, dataUrl, memory);
+    const base = await callOpenAIAnalyze(context, dataUrl, memory, pose);
 
     const repetitionStreak = computeRepetitionCount(recent as any[], base.errorCode);
     const prevGrade = recent?.[0]?.grade_percent ?? null;
-    const { final, delta } = computeAdaptiveGrade(
-      base.gradePercent,
-      repetitionStreak,
-      typeof prevGrade === "number" ? prevGrade : null
-    );
+    const { final, delta } = computeAdaptiveGrade(base.gradePercent, repetitionStreak, typeof prevGrade === "number" ? prevGrade : null);
 
     const drills = progressionDrills(base.drills, repetitionStreak, delta);
 
+    // If pose exists: force overlay lines from pose so it never comes back empty.
+    const forcedOverlay = pose ? overlayFromPose(pose) : base.overlay;
+
     const result: VisionResult = {
       ...base,
+      overlay: forcedOverlay,
       gradePercent: final,
       repetitionCount: repetitionStreak,
       scoreDelta: delta,

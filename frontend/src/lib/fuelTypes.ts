@@ -29,6 +29,14 @@ export type FuelOutput = {
   confidence: Confidence;
 
   report: string;
+
+  /**
+   * ONE concrete fix that improves this meal for the fighter/training context.
+   * Make optional initially to avoid breaking existing backend responses.
+   * Once backend is updated, you can make it required.
+   */
+  correction?: string;
+
   questions: string[]; // 0-3
   followups_id: string;
 };
