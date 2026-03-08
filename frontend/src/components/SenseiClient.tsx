@@ -1,14 +1,16 @@
 "use client";
 
-import React, { useMemo, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import SenseiScreen, {
   AskSectionId,
   BaseArt,
+  BuildStage,
   CampControl,
   CampDirective,
   ChatMessage,
   FocusKey,
   GymCandidate,
+  SenseiSystemStatus,
   TrainingFocus,
 } from "@/components/SenseiScreen";
 import type { VisionAnalysis } from "@/components/SenseiVisionScreen";
@@ -17,12 +19,28 @@ function uid() {
   return Math.random().toString(36).slice(2);
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function safeParseVision(): VisionAnalysis | null {
   try {
     const raw = localStorage.getItem("disciplin_latest_vision");
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (parsed?.analysis_id && parsed?.findings) return parsed as VisionAnalysis;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function safeParseFuel(): { score?: number; report?: string; followups_id?: string } | null {
+  try {
+    const raw = localStorage.getItem("disciplin_latest_fuel");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed?.score || parsed?.report || parsed?.followups_id) return parsed;
     return null;
   } catch {
     return null;
@@ -39,10 +57,6 @@ function deriveWeaknessTags(v: VisionAnalysis | null): string[] {
   return tags;
 }
 
-/**
- * Super simple scoring now:
- * - Later: replace with DB fields (gym strengths, coaching focus, sparring intensity, etc.)
- */
 function scoreGyms(args: {
   focus: FocusKey;
   baseArt: BaseArt;
@@ -51,7 +65,6 @@ function scoreGyms(args: {
 }): GymCandidate[] {
   const style = args.styleTags.toLowerCase();
 
-  // Your “listed gyms” can be a real DB later.
   const gyms: GymCandidate[] = [
     {
       id: "kuma",
@@ -85,7 +98,6 @@ function scoreGyms(args: {
     },
   ];
 
-  // Adjust by focus
   for (const g of gyms) {
     if (args.focus === "Pressure" && (g.id === "kuma" || g.id === "wrestling_room")) g.compatibility += 10;
     if (args.focus === "Speed" && g.id === "striking_room") g.compatibility += 12;
@@ -93,7 +105,6 @@ function scoreGyms(args: {
     if (args.focus === "Recovery") g.compatibility -= 8;
   }
 
-  // Adjust by style tags
   if (style.includes("pressure")) {
     gyms.find((g) => g.id === "kuma")!.compatibility += 6;
     gyms.find((g) => g.id === "wrestling_room")!.compatibility += 4;
@@ -102,12 +113,10 @@ function scoreGyms(args: {
     gyms.find((g) => g.id === "striking_room")!.compatibility += 5;
   }
 
-  // Adjust by weaknesses from Vision
   if (args.weaknessTags.includes("entry_timing")) gyms.find((g) => g.id === "wrestling_room")!.compatibility += 10;
   if (args.weaknessTags.includes("guard_exit")) gyms.find((g) => g.id === "striking_room")!.compatibility += 9;
   if (args.weaknessTags.includes("base_integrity")) gyms.find((g) => g.id === "wrestling_room")!.compatibility += 5;
 
-  // clamp
   for (const g of gyms) g.compatibility = Math.max(0, Math.min(99, Math.round(g.compatibility)));
 
   return gyms.sort((a, b) => b.compatibility - a.compatibility);
@@ -116,7 +125,7 @@ function scoreGyms(args: {
 function buildDirective(v: VisionAnalysis | null, focus: FocusKey): CampDirective {
   if (!v) {
     return {
-      title: `Set a real directive (run Sensei Vision)`,
+      title: "Set a real directive (run Sensei Vision)",
       source: "No analysis loaded",
       bullets: [
         "Run Sensei Vision on a clip before making camp decisions.",
@@ -153,7 +162,7 @@ function buildTraining(v: VisionAnalysis | null, focus: FocusKey, constraints: s
   if (!primary.length) primary.push("Pick 1 technical theme from Vision and train it for reps.");
 
   if (focus === "Pressure") secondary.push("Wall pace: re-attack rule (no disengage).");
-  if (focus === "Speed") secondary.push("Fast hands: 6x2 min—touch, exit, reset.");
+  if (focus === "Speed") secondary.push("Fast hands: 6x2 min — touch, exit, reset.");
   if (focus === "Power") secondary.push("Explosive actions: low volume, full reset, perfect form.");
   if (focus === "Recovery") secondary.push("Flow + mobility: leave fresher than you arrived.");
   if (focus === "Mixed") secondary.push("Balanced rounds: 3x striking + 3x grappling focus blocks.");
@@ -191,7 +200,18 @@ function buildControl(v: VisionAnalysis | null, constraints: string): CampContro
   return { trainingLoad, warnings, nextStep };
 }
 
-/* ========================= COMPONENT ========================= */
+function buildSystemStatus(vision: VisionAnalysis | null, fuel: { score?: number; report?: string } | null): SenseiSystemStatus {
+  return {
+    visionConnected: !!vision,
+    visionLabel: vision
+      ? `Last analysis: ${vision.clipLabel}`
+      : "No recent Vision analysis. Run Vision for a real directive.",
+    fuelConnected: !!fuel,
+    fuelLabel: fuel
+      ? `Last Fuel report available${typeof fuel.score === "number" ? ` · Score ${Math.round(fuel.score)}` : ""}`
+      : "No recent Fuel report. Nutrition guidance is separate for now.",
+  };
+}
 
 export default function SenseiClient() {
   const [focus, setFocus] = useState<FocusKey>("Pressure");
@@ -200,29 +220,50 @@ export default function SenseiClient() {
   const [constraints, setConstraints] = useState<string>("60 min, no partner today");
 
   const [busy, setBusy] = useState(false);
+  const [buildStage, setBuildStage] = useState<BuildStage>("IDLE");
   const [statusLabel, setStatusLabel] = useState<"Idle" | "Building" | "Ready" | "Error">("Idle");
 
   const [directive, setDirective] = useState<CampDirective | null>(null);
   const [trainingFocus, setTrainingFocus] = useState<TrainingFocus | null>(null);
   const [gyms, setGyms] = useState<GymCandidate[]>([]);
   const [control, setControl] = useState<CampControl | null>(null);
+  const [systemStatus, setSystemStatus] = useState<SenseiSystemStatus>(() =>
+    buildSystemStatus(safeParseVision(), safeParseFuel())
+  );
 
-  // Chat (optional) — you can wire to /api/sensei later
   const [followupsId, setFollowupsId] = useState<string | null>("camp_local");
   const [activeChatSection, setActiveChatSection] = useState<AskSectionId>("all");
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
-    { id: uid(), role: "system", section: "all", text: "Sensei = camp control. Vision = analysis. Build camp, then ask about decisions.", ts: Date.now() },
+    {
+      id: uid(),
+      role: "system",
+      section: "all",
+      text: "Sensei = camp control. Vision = analysis. Build camp, then ask about decisions.",
+      ts: Date.now(),
+    },
   ]);
 
-  const lastVisionRef = useRef<VisionAnalysis | null>(null);
+  const lastVisionRef = useRef<VisionAnalysis | null>(safeParseVision());
+  const lastFuelRef = useRef<{ score?: number; report?: string; followups_id?: string } | null>(safeParseFuel());
 
-  const statusTone = statusLabel === "Ready" ? "good" : statusLabel === "Building" ? "warn" : statusLabel === "Error" ? "bad" : "neutral";
+  const statusTone =
+    statusLabel === "Ready"
+      ? "good"
+      : statusLabel === "Building"
+      ? "warn"
+      : statusLabel === "Error"
+      ? "bad"
+      : "neutral";
 
   function onOpenVision() {
     window.location.href = "/sensei-vision";
+  }
+
+  function onOpenFuel() {
+    window.location.href = "/fuel";
   }
 
   function onReset() {
@@ -230,12 +271,24 @@ export default function SenseiClient() {
     setTrainingFocus(null);
     setGyms([]);
     setControl(null);
-
     setStatusLabel("Idle");
+    setBuildStage("IDLE");
     setBusy(false);
 
+    const vision = safeParseVision();
+    const fuel = safeParseFuel();
+    lastVisionRef.current = vision;
+    lastFuelRef.current = fuel;
+    setSystemStatus(buildSystemStatus(vision, fuel));
+
     setChatMessages([
-      { id: uid(), role: "system", section: "all", text: "Reset complete. Run Vision then build camp.", ts: Date.now() },
+      {
+        id: uid(),
+        role: "system",
+        section: "all",
+        text: "Reset complete. Run Vision then build camp.",
+        ts: Date.now(),
+      },
     ]);
   }
 
@@ -244,19 +297,32 @@ export default function SenseiClient() {
     setStatusLabel("Building");
 
     try {
-      // Pull latest Vision analysis (if any)
+      setBuildStage("READING_CONTEXT");
+      await delay(450);
+
       const vision = safeParseVision();
+      const fuel = safeParseFuel();
       lastVisionRef.current = vision;
+      lastFuelRef.current = fuel;
+      setSystemStatus(buildSystemStatus(vision, fuel));
 
       const weaknessTags = deriveWeaknessTags(vision);
 
+      setBuildStage("SETTING_DIRECTIVE");
+      await delay(450);
       const d = buildDirective(vision, focus);
+
+      setBuildStage("BUILDING_TRAINING");
+      await delay(500);
       const t = buildTraining(vision, focus, constraints);
-      const g = scoreGyms({ focus, baseArt, styleTags, weaknessTags });
+
+      setBuildStage("SETTING_CONTROL");
+      await delay(420);
       const c = buildControl(vision, constraints);
 
-      // Small delay makes the UI feel intentional (remove later)
-      await new Promise((r) => setTimeout(r, 180));
+      setBuildStage("RANKING_GYMS");
+      await delay(420);
+      const g = scoreGyms({ focus, baseArt, styleTags, weaknessTags });
 
       setDirective(d);
       setTrainingFocus(t);
@@ -276,12 +342,21 @@ export default function SenseiClient() {
         },
       ]);
 
+      setBuildStage("DONE");
+      await delay(180);
       setStatusLabel("Ready");
     } catch (e: any) {
+      setBuildStage("ERROR");
       setStatusLabel("Error");
       setChatMessages((prev) => [
         ...prev,
-        { id: uid(), role: "system", section: "all", text: `Camp build failed: ${e?.message ?? "unknown error"}`, ts: Date.now() },
+        {
+          id: uid(),
+          role: "system",
+          section: "all",
+          text: `Camp build failed: ${e?.message ?? "unknown error"}`,
+          ts: Date.now(),
+        },
       ]);
     } finally {
       setBusy(false);
@@ -301,14 +376,17 @@ export default function SenseiClient() {
 
     const section = activeChatSection;
 
-    setChatMessages((prev) => [...prev, { id: uid(), role: "user", section, text, ts: Date.now() }]);
+    setChatMessages((prev) => [
+      ...prev,
+      { id: uid(), role: "user", section, text, ts: Date.now() },
+    ]);
     setChatInput("");
     setChatSending(true);
 
-    // For now: local “coach-like” reply (wire to /api/sensei later)
     try {
       const vision = lastVisionRef.current;
       const topFinding = vision?.findings?.find((f) => f.severity === "HIGH") ?? vision?.findings?.[0];
+      const best = gyms[0];
 
       const replyLines: string[] = [];
       replyLines.push("Decision:");
@@ -318,7 +396,7 @@ export default function SenseiClient() {
       replyLines.push("Next steps:");
       if (topFinding) replyLines.push(`- Fix first: ${topFinding.title}`);
       replyLines.push("- Keep it executable: reps → short rounds → re-test with Vision.");
-      if (gyms[0]) replyLines.push(`- Best gym match today: ${gyms[0].name} (${gyms[0].compatibility}% match).`);
+      if (best) replyLines.push(`- Gym support option: ${best.name} (${best.compatibility}% match).`);
 
       setChatMessages((prev) => [
         ...prev,
@@ -343,9 +421,11 @@ export default function SenseiClient() {
       trainingFocus={trainingFocus}
       gyms={gyms}
       control={control}
+      systemStatus={systemStatus}
       onBuildCamp={onBuildCamp}
       onReset={onReset}
       onOpenVision={onOpenVision}
+      onOpenFuel={onOpenFuel}
       followupsId={followupsId}
       activeChatSection={activeChatSection}
       setActiveChatSection={setActiveChatSection}
@@ -356,6 +436,7 @@ export default function SenseiClient() {
       onSendChat={onSendChat}
       onChatKeyDown={onChatKeyDown}
       busy={busy}
+      buildStage={buildStage}
       statusLabel={statusLabel}
       statusTone={statusTone}
     />

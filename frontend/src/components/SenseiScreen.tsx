@@ -1,13 +1,20 @@
-// src/components/SenseiScreen.tsx
 "use client";
 
-import React from "react";
+import React, { useMemo, useState } from "react";
 import Link from "next/link";
 
 /* ========================= TYPES ========================= */
 
 export type FocusKey = "Pressure" | "Speed" | "Power" | "Recovery" | "Mixed";
-export type BaseArt = "MMA" | "Wrestling" | "Boxing" | "Kickboxing" | "Muay Thai" | "BJJ" | "Judo" | "Sambo";
+export type BaseArt =
+  | "MMA"
+  | "Wrestling"
+  | "Boxing"
+  | "Kickboxing"
+  | "Muay Thai"
+  | "BJJ"
+  | "Judo"
+  | "Sambo";
 
 export type CampDirective = {
   title: string;
@@ -25,7 +32,7 @@ export type GymCandidate = {
   id: string;
   name: string;
   location?: string;
-  compatibility: number; // 0-100
+  compatibility: number;
   reason: string[];
   bestFor: string[];
   watchOut: string[];
@@ -38,7 +45,15 @@ export type CampControl = {
   nextStep: string[];
 };
 
-export type AskSectionId = "all" | "directive" | "training" | "gyms" | "control";
+export type SenseiSystemStatus = {
+  visionConnected: boolean;
+  visionLabel: string;
+  fuelConnected: boolean;
+  fuelLabel: string;
+};
+
+export type AskSectionId = "all" | "directive" | "training" | "control" | "gyms";
+export type OutputTabId = "directive" | "training" | "control" | "gyms";
 
 export type ChatMessage = {
   id: string;
@@ -47,6 +62,16 @@ export type ChatMessage = {
   text: string;
   ts: number;
 };
+
+export type BuildStage =
+  | "IDLE"
+  | "READING_CONTEXT"
+  | "SETTING_DIRECTIVE"
+  | "BUILDING_TRAINING"
+  | "SETTING_CONTROL"
+  | "RANKING_GYMS"
+  | "DONE"
+  | "ERROR";
 
 /* ========================= UI HELPERS ========================= */
 
@@ -70,7 +95,11 @@ function Badge({
       ? "border-rose-500/30 bg-rose-500/10 text-rose-200"
       : "border-slate-700/60 bg-slate-900/30 text-slate-200/90";
 
-  return <span className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-xs", cls)}>{children}</span>;
+  return (
+    <span className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-xs", cls)}>
+      {children}
+    </span>
+  );
 }
 
 function Card({
@@ -117,6 +146,118 @@ function loadTone(t: CampControl["trainingLoad"]): "good" | "warn" | "bad" {
   return "bad";
 }
 
+function stageProgress(stage: BuildStage): number {
+  switch (stage) {
+    case "READING_CONTEXT":
+      return 18;
+    case "SETTING_DIRECTIVE":
+      return 36;
+    case "BUILDING_TRAINING":
+      return 58;
+    case "SETTING_CONTROL":
+      return 78;
+    case "RANKING_GYMS":
+      return 92;
+    case "DONE":
+      return 100;
+    case "ERROR":
+      return 100;
+    case "IDLE":
+    default:
+      return 0;
+  }
+}
+
+function stageLabel(stage: BuildStage): string {
+  switch (stage) {
+    case "READING_CONTEXT":
+      return "Reading context";
+    case "SETTING_DIRECTIVE":
+      return "Setting directive";
+    case "BUILDING_TRAINING":
+      return "Building training";
+    case "SETTING_CONTROL":
+      return "Setting control";
+    case "RANKING_GYMS":
+      return "Ranking gym support";
+    case "DONE":
+      return "Ready";
+    case "ERROR":
+      return "Error";
+    case "IDLE":
+    default:
+      return "Idle";
+  }
+}
+
+function BuildRitual({
+  stage,
+}: {
+  stage: BuildStage;
+}) {
+  const steps: Array<{ key: BuildStage; label: string }> = [
+    { key: "READING_CONTEXT", label: "Reading latest Vision context" },
+    { key: "SETTING_DIRECTIVE", label: "Locking weekly directive" },
+    { key: "BUILDING_TRAINING", label: "Mapping training focus" },
+    { key: "SETTING_CONTROL", label: "Setting load, warnings, next step" },
+    { key: "RANKING_GYMS", label: "Ranking gym support options" },
+  ];
+
+  const currentIndex = steps.findIndex((s) => s.key === stage);
+
+  return (
+    <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-5">
+      <div className="text-[11px] tracking-[0.28em] uppercase text-emerald-300/80">Building camp</div>
+      <div className="mt-2 text-sm font-semibold text-slate-50">{stageLabel(stage)}…</div>
+
+      <div className="mt-4 h-2 w-full overflow-hidden rounded-full border border-slate-800/60 bg-slate-950/60">
+        <div
+          className="h-full rounded-full bg-emerald-400/80 transition-all duration-500"
+          style={{ width: `${stageProgress(stage)}%` }}
+        />
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {steps.map((step, idx) => {
+          const done = idx < currentIndex;
+          const active = idx === currentIndex;
+          return (
+            <div
+              key={step.key}
+              className={cn(
+                "flex items-center gap-3 rounded-xl border px-3 py-2 text-sm transition",
+                done
+                  ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-100"
+                  : active
+                  ? "border-amber-500/20 bg-amber-500/5 text-amber-100"
+                  : "border-slate-800/60 bg-slate-950/30 text-slate-400"
+              )}
+            >
+              <span
+                className={cn(
+                  "inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold",
+                  done
+                    ? "bg-emerald-400/20 text-emerald-200"
+                    : active
+                    ? "bg-amber-400/20 text-amber-200 animate-pulse"
+                    : "bg-slate-800 text-slate-400"
+                )}
+              >
+                {done ? "✓" : idx + 1}
+              </span>
+              <span>{step.label}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-3 text-xs text-slate-300/60">
+        Sensei is assembling the directive first, then training, then control, then gym support.
+      </div>
+    </div>
+  );
+}
+
 /* ========================= COMPONENT ========================= */
 
 export default function SenseiScreen(props: {
@@ -135,11 +276,12 @@ export default function SenseiScreen(props: {
   trainingFocus: TrainingFocus | null;
   gyms: GymCandidate[];
   control: CampControl | null;
+  systemStatus: SenseiSystemStatus;
 
   onBuildCamp: () => void;
   onReset: () => void;
-
   onOpenVision: () => void;
+  onOpenFuel: () => void;
 
   followupsId?: string | null;
   activeChatSection: AskSectionId;
@@ -152,15 +294,25 @@ export default function SenseiScreen(props: {
   onChatKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
 
   busy: boolean;
+  buildStage: BuildStage;
   statusLabel: string;
   statusTone: "neutral" | "good" | "warn" | "bad";
 }) {
+  const [activeOutputTab, setActiveOutputTab] = useState<OutputTabId>("directive");
+
   const focusOptions: Array<{ k: FocusKey; desc: string }> = [
     { k: "Pressure", desc: "pace, wall, chain attacks, grind" },
     { k: "Speed", desc: "sharp entries, fast hands, reset discipline" },
     { k: "Power", desc: "explosive actions, low volume, perfect form" },
     { k: "Recovery", desc: "low impact, tissue quality, safe output" },
     { k: "Mixed", desc: "balanced priorities, adapt session-by-session" },
+  ];
+
+  const outputTabs: Array<{ id: OutputTabId; label: string }> = [
+    { id: "directive", label: "Directive" },
+    { id: "training", label: "Training" },
+    { id: "control", label: "Control" },
+    { id: "gyms", label: "Gyms" },
   ];
 
   const arts: Array<BaseArt> = ["MMA", "Wrestling", "Boxing", "Kickboxing", "Muay Thai", "BJJ", "Judo", "Sambo"];
@@ -171,8 +323,8 @@ export default function SenseiScreen(props: {
     { id: "all", label: "All" },
     { id: "directive", label: "Directive" },
     { id: "training", label: "Training" },
-    { id: "gyms", label: "Gyms" },
     { id: "control", label: "Control" },
+    { id: "gyms", label: "Gyms" },
   ];
 
   const filteredMessages =
@@ -180,13 +332,27 @@ export default function SenseiScreen(props: {
       ? props.chatMessages
       : props.chatMessages.filter((m) => m.section === props.activeChatSection);
 
+  const topGym = useMemo(() => {
+    if (!props.gyms?.length) return null;
+    return [...props.gyms].sort((a, b) => b.compatibility - a.compatibility)[0] ?? null;
+  }, [props.gyms]);
+
+  const campSummary = useMemo(() => {
+    return {
+      directiveTitle: props.directive?.title ?? "No directive yet",
+      load: props.control?.trainingLoad ?? "—",
+      primaryFocus: props.trainingFocus?.primary?.[0] ?? "Build camp first",
+      nextStep: props.control?.nextStep?.[0] ?? "Run Vision, then build camp",
+    };
+  }, [props.directive, props.trainingFocus, props.control]);
+
   return (
     <main className="min-h-[calc(100vh-72px)] pt-24 pb-10">
       <div className="mx-auto max-w-6xl px-4 md:px-6">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Badge tone="good">SENSEI</Badge>
-            <span className="text-sm text-slate-200/80">Camp control. No analysis. Decisions only.</span>
+            <span className="text-sm text-slate-200/80">Camp control system. Build the week. Keep it executable.</span>
           </div>
 
           <div className="flex items-center gap-2">
@@ -205,8 +371,8 @@ export default function SenseiScreen(props: {
           {/* LEFT */}
           <div className="lg:col-span-5 space-y-6">
             <Card
-              title="Inputs"
-              sub="Describe your style. Sensei maps Vision findings → training focus → gym decision."
+              title="Camp inputs"
+              sub="Build the next 7 days. Sensei uses your style, constraints, and latest Vision context if available."
               right={<Badge tone="neutral">Camp builder</Badge>}
             >
               <div className="space-y-4">
@@ -249,22 +415,22 @@ export default function SenseiScreen(props: {
                 </div>
 
                 <div>
-                  <label className="text-xs text-slate-300/70">Style tags (comma separated)</label>
+                  <label className="text-xs text-slate-300/70">Style tags</label>
                   <input
                     value={props.styleTags}
                     onChange={(e) => props.setStyleTags(e.target.value)}
-                    placeholder='e.g. "pressure wrestler, southpaw, counter"'
+                    placeholder='e.g. "pressure wrestler, forward pressure, short-range boxing"'
                     className="mt-2 w-full rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
                   />
                 </div>
 
                 <div>
-                  <label className="text-xs text-slate-300/70">Constraints (equipment / injuries / time)</label>
+                  <label className="text-xs text-slate-300/70">Constraints</label>
                   <textarea
                     value={props.constraints}
                     onChange={(e) => props.setConstraints(e.target.value)}
                     rows={3}
-                    placeholder='e.g. "knee sensitive; no hard pivots; 60 min; no partner today"'
+                    placeholder='e.g. "knee sensitive, 60 min, no partner today"'
                     className="mt-2 w-full resize-none rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
                   />
                 </div>
@@ -280,7 +446,7 @@ export default function SenseiScreen(props: {
                         : "bg-slate-800/60 text-slate-400 cursor-not-allowed"
                     )}
                   >
-                    {props.busy ? "Building…" : "Build camp"}
+                    {props.busy ? `${stageLabel(props.buildStage)}…` : "Build camp"}
                   </button>
 
                   <button
@@ -290,194 +456,290 @@ export default function SenseiScreen(props: {
                   >
                     Reset
                   </button>
-
-                  <button
-                    onClick={props.onOpenVision}
-                    className="ml-auto rounded-full border border-slate-700/70 bg-slate-950/30 px-5 py-3 text-sm font-medium text-slate-100 hover:bg-slate-900/40"
-                  >
-                    Open Vision →
-                  </button>
                 </div>
 
                 <div className="text-xs text-slate-300/60">
-                  Rule: Sensei doesn’t analyze. If Vision is empty, decisions are generic.
+                  Build camp first. Gym recommendations are support, not the main event.
                 </div>
               </div>
             </Card>
 
             <Card
-              title="Gym decision"
-              sub="One pick. One reason. Commit."
-              right={
-                <Badge tone={props.gyms.length ? "good" : "neutral"}>
-                  {props.gyms.length ? "Decided" : "Waiting"}
-                </Badge>
-              }
+              title="System status"
+              sub="Light continuity between tools. Sensei reads recent context when it exists."
+              right={<Badge tone="neutral">AI status</Badge>}
             >
-              {props.gyms.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
-                  Build camp to generate a decision. (Later: read from your real gyms DB.)
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {/* ✅ IMPORTANT: render ONLY the top 1 */}
-                  {props.gyms.slice(0, 1).map((g) => (
-                    <div key={g.id} className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold text-slate-50">{g.name}</div>
-                          <div className="mt-1 text-xs text-slate-300/70">{g.location ?? "Location not set"}</div>
-                        </div>
-                        <Badge tone={g.compatibility >= 90 ? "good" : g.compatibility >= 80 ? "warn" : "neutral"}>
-                          {g.compatibility}% match
-                        </Badge>
-                      </div>
-
-                      <div className="mt-3 grid gap-4 md:grid-cols-2">
-                        <div>
-                          <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Reason</div>
-                          <div className="mt-2">
-                            <Bullets items={g.reason} />
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Best for</div>
-                          <div className="mt-2">
-                            <Bullets items={g.bestFor} />
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="mt-3 rounded-xl border border-slate-800/60 bg-slate-950/30 p-3">
-                        <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Watch out</div>
-                        <div className="mt-2">
-                          <Bullets items={g.watchOut} />
-                        </div>
-                      </div>
-
-                      {g.href ? (
-                        <div className="mt-3">
-                          <Link className="text-xs text-emerald-200 underline" href={g.href}>
-                            Open gym profile →
-                          </Link>
-                        </div>
-                      ) : null}
+              <div className="grid gap-3">
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.22em] text-slate-400/70">Vision</div>
+                      <div className="mt-1 text-sm text-slate-100">{props.systemStatus.visionLabel}</div>
                     </div>
-                  ))}
+                    <div className="flex items-center gap-2">
+                      <Badge tone={props.systemStatus.visionConnected ? "good" : "warn"}>
+                        {props.systemStatus.visionConnected ? "Connected" : "Missing"}
+                      </Badge>
+                      <button
+                        onClick={props.onOpenVision}
+                        className="rounded-full border border-slate-700/70 bg-slate-950/30 px-3 py-1.5 text-xs text-slate-200/80 hover:bg-slate-900/40"
+                      >
+                        Open Vision →
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              )}
+
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.22em] text-slate-400/70">Fuel</div>
+                      <div className="mt-1 text-sm text-slate-100">{props.systemStatus.fuelLabel}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge tone={props.systemStatus.fuelConnected ? "good" : "warn"}>
+                        {props.systemStatus.fuelConnected ? "Connected" : "Missing"}
+                      </Badge>
+                      <button
+                        onClick={props.onOpenFuel}
+                        className="rounded-full border border-slate-700/70 bg-slate-950/30 px-3 py-1.5 text-xs text-slate-200/80 hover:bg-slate-900/40"
+                      >
+                        Open Fuel →
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </Card>
           </div>
 
           {/* RIGHT */}
           <div className="lg:col-span-7 space-y-6">
             <Card
-              title="Camp directive"
-              sub="Top command for the next 7 days."
-              right={props.directive ? <Badge tone="good">Set</Badge> : <Badge tone="neutral">Unset</Badge>}
+              title="Camp summary"
+              sub="What matters right now."
+              right={hasCamp ? <Badge tone="good">Ready</Badge> : <Badge tone="neutral">Waiting</Badge>}
             >
-              {!props.directive ? (
-                <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
-                  No directive yet. Run Sensei Vision then Build camp.
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Directive</div>
+                  <div className="mt-2 text-sm font-semibold text-slate-50">{campSummary.directiveTitle}</div>
                 </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-semibold text-slate-50">{props.directive.title}</div>
-                        <div className="mt-1 text-xs text-slate-300/70">{props.directive.source}</div>
-                      </div>
-                      <Badge tone="neutral">Directive</Badge>
-                    </div>
-                    <div className="mt-3">
-                      <Bullets items={props.directive.bullets} />
-                    </div>
+
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Training load</div>
+                  <div className="mt-2">
+                    {props.control ? (
+                      <Badge tone={loadTone(props.control.trainingLoad)}>{campSummary.load}</Badge>
+                    ) : (
+                      <span className="text-sm text-slate-400">—</span>
+                    )}
                   </div>
                 </div>
-              )}
+
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Primary focus</div>
+                  <div className="mt-2 text-sm text-slate-100">{campSummary.primaryFocus}</div>
+                </div>
+
+                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                  <div className="text-[11px] tracking-[0.22em] uppercase text-emerald-200/80">Next step</div>
+                  <div className="mt-2 text-sm text-slate-100">{campSummary.nextStep}</div>
+                </div>
+              </div>
             </Card>
 
             <Card
-              title="Training focus"
-              sub="Built from Vision findings + your focus."
-              right={props.trainingFocus ? <Badge tone="good">Ready</Badge> : <Badge tone="neutral">Waiting</Badge>}
-            >
-              {!props.trainingFocus ? (
-                <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
-                  Build camp to generate a concrete training focus.
-                </div>
-              ) : (
-                <div className="grid gap-4 md:grid-cols-3">
-                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                    <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Primary</div>
-                    <div className="mt-2">
-                      <Bullets items={props.trainingFocus.primary} />
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                    <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Secondary</div>
-                    <div className="mt-2">
-                      <Bullets items={props.trainingFocus.secondary} />
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                    <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Avoid</div>
-                    <div className="mt-2">
-                      <Bullets items={props.trainingFocus.avoid} />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </Card>
-
-            <Card
-              title="Camp control"
-              sub="Load, warnings, next step."
+              title="Camp output"
+              sub="Directive first. Gyms stay separate as support."
               right={
-                props.control ? (
-                  <Badge tone={loadTone(props.control.trainingLoad)}>{props.control.trainingLoad}</Badge>
+                props.busy ? (
+                  <Badge tone="warn">{stageLabel(props.buildStage)}</Badge>
+                ) : hasCamp ? (
+                  <Badge tone="good">Built</Badge>
                 ) : (
-                  <Badge tone="neutral">Unset</Badge>
+                  <Badge tone="neutral">No output</Badge>
                 )
               }
             >
-              {!props.control ? (
-                <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
-                  Build camp to set training load and next step.
-                </div>
+              {props.busy ? (
+                <BuildRitual stage={props.buildStage} />
               ) : (
-                <div className="space-y-4">
-                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                    <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Warnings</div>
-                    <div className="mt-2">
-                      <Bullets items={props.control.warnings} />
-                    </div>
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    {outputTabs.map((tab) => {
+                      const active = tab.id === activeOutputTab;
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setActiveOutputTab(tab.id)}
+                          className={cn(
+                            "rounded-full border px-3 py-1.5 text-xs transition",
+                            active
+                              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                              : "border-slate-800/70 bg-slate-950/30 text-slate-200/80 hover:bg-slate-900/30"
+                          )}
+                        >
+                          {tab.label}
+                        </button>
+                      );
+                    })}
                   </div>
 
-                  <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-                    <div className="text-[11px] tracking-[0.22em] uppercase text-emerald-200/80">Next step</div>
-                    <div className="mt-2">
-                      <Bullets items={props.control.nextStep} />
-                    </div>
-                  </div>
+                  <div className="mt-4">
+                    {activeOutputTab === "directive" && (
+                      <>
+                        {!props.directive ? (
+                          <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
+                            No directive yet. Run Sensei Vision, then Build camp.
+                          </div>
+                        ) : (
+                          <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold text-slate-50">{props.directive.title}</div>
+                                <div className="mt-1 text-xs text-slate-300/70">{props.directive.source}</div>
+                              </div>
+                              <Badge tone="neutral">Directive</Badge>
+                            </div>
+                            <div className="mt-3">
+                              <Bullets items={props.directive.bullets} />
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
 
-                  <div className="flex items-center justify-between gap-3">
-                    <Link className="text-xs text-emerald-200 underline" href="/sensei-vision">
-                      Run Vision again →
-                    </Link>
-                    <Link className="text-xs text-slate-200/80 underline" href="/fuel">
-                      Open Fuel →
-                    </Link>
+                    {activeOutputTab === "training" && (
+                      <>
+                        {!props.trainingFocus ? (
+                          <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
+                            Build camp to generate a concrete training focus.
+                          </div>
+                        ) : (
+                          <div className="grid gap-4 md:grid-cols-3">
+                            <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                              <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Primary</div>
+                              <div className="mt-2">
+                                <Bullets items={props.trainingFocus.primary} />
+                              </div>
+                            </div>
+                            <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                              <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Secondary</div>
+                              <div className="mt-2">
+                                <Bullets items={props.trainingFocus.secondary} />
+                              </div>
+                            </div>
+                            <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                              <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Avoid</div>
+                              <div className="mt-2">
+                                <Bullets items={props.trainingFocus.avoid} />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {activeOutputTab === "control" && (
+                      <>
+                        {!props.control ? (
+                          <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
+                            Build camp to set training load and next step.
+                          </div>
+                        ) : (
+                          <div className="space-y-4">
+                            <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Training load</div>
+                                <Badge tone={loadTone(props.control.trainingLoad)}>{props.control.trainingLoad}</Badge>
+                              </div>
+                            </div>
+
+                            <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                              <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Warnings</div>
+                              <div className="mt-2">
+                                <Bullets items={props.control.warnings} />
+                              </div>
+                            </div>
+
+                            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                              <div className="text-[11px] tracking-[0.22em] uppercase text-emerald-200/80">Next step</div>
+                              <div className="mt-2">
+                                <Bullets items={props.control.nextStep} />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {activeOutputTab === "gyms" && (
+                      <>
+                        {!topGym ? (
+                          <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
+                            Build camp to generate a gym recommendation.
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-semibold text-slate-50">{topGym.name}</div>
+                                  <div className="mt-1 text-xs text-slate-300/70">{topGym.location ?? "Location not set"}</div>
+                                </div>
+                                <Badge tone={topGym.compatibility >= 90 ? "good" : topGym.compatibility >= 80 ? "warn" : "neutral"}>
+                                  {topGym.compatibility}% match
+                                </Badge>
+                              </div>
+
+                              <div className="mt-3 grid gap-4 md:grid-cols-2">
+                                <div>
+                                  <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Reason</div>
+                                  <div className="mt-2">
+                                    <Bullets items={topGym.reason} />
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Best for</div>
+                                  <div className="mt-2">
+                                    <Bullets items={topGym.bestFor} />
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="mt-3 rounded-xl border border-slate-800/60 bg-slate-950/30 p-3">
+                                <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Watch out</div>
+                                <div className="mt-2">
+                                  <Bullets items={topGym.watchOut} />
+                                </div>
+                              </div>
+
+                              {topGym.href ? (
+                                <div className="mt-3">
+                                  <Link className="text-xs text-emerald-200 underline" href={topGym.href}>
+                                    Open gym profile →
+                                  </Link>
+                                </div>
+                              ) : null}
+                            </div>
+
+                            <div className="text-xs text-slate-300/60">
+                              Gym recommendation is support. Camp directive stays primary.
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
-                </div>
+                </>
               )}
             </Card>
 
-            {/* CHAT */}
             <Card
               title="Sensei Chat"
-              sub={props.followupsId ? "Ask about camp decisions. Short, concrete." : "Build camp to unlock context."}
+              sub={props.followupsId ? "Ask about camp decisions. Short, concrete, coach-like." : "Build camp to unlock context."}
               right={<Badge tone={props.followupsId ? "good" : "warn"}>{props.followupsId ? "Unlocked" : "Locked"}</Badge>}
             >
               <div className="flex flex-wrap gap-2">
