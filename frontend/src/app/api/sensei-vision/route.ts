@@ -1,521 +1,466 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import OpenAI from "openai";
+import { z } from "zod";
+import type { VisionAnalysis } from "@/lib/senseiVisionTypes";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
+export const dynamic = "force-dynamic";
 
-type Overlay = {
-  lines?: Array<{ a: [number, number]; b: [number, number]; label?: string; tone?: "good" | "bad" | "neutral" }>;
-  points?: Array<{ p: [number, number]; label?: string; tone?: "good" | "bad" | "neutral" }>;
-};
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
+});
 
-type VisionResult = {
-  ok: true;
+const RequestSchema = z.object({
+  clipLabel: z.string().optional().default("Frame upload"),
+  sport: z.string().optional().default("MMA"),
+  notes: z.string().optional().default(""),
+  imageBase64: z.string().min(1, "Missing imageBase64"),
+});
 
-  errorCode: string;
-  biomechCategory: string;
-  severity: number;
+function buildAllowedFixFamily(technique: string, discipline: string): string[] {
+  const t = technique.toLowerCase();
+  const d = discipline.toLowerCase();
 
-  primaryError: string;
-  smallestCue: string;
+  if (d === "striking") {
+    if (t.includes("high kick") || t.includes("head kick") || t.includes("round kick")) {
+      return [
+        "support_foot_pivot",
+        "hip_turn",
+        "chamber_height",
+        "guard_position",
+        "balance_over_base_leg",
+        "torso_posture",
+        "extension_path",
+        "retraction",
+      ];
+    }
 
-  right: string[];
-  wrong: string[];
+    if (t.includes("jab")) {
+      return [
+        "lead_shoulder",
+        "rear_hand_guard",
+        "elbow_path",
+        "chin_position",
+        "stance_base",
+        "recovery_line",
+      ];
+    }
 
-  hindrance: string;
+    if (t.includes("cross")) {
+      return [
+        "rear_hip_rotation",
+        "rear_heel_turn",
+        "rear_shoulder_path",
+        "rear_hand_recovery",
+        "chin_position",
+        "stance_integrity",
+      ];
+    }
 
-  drills: string[];
-  safety: string[];
-  questions: string[];
-  tags: string[];
-
-  gradePercent: number;
-
-  overlay: Overlay;
-
-  repetitionCount: number;
-  scoreDelta: number | null;
-};
-
-type PosePacket = {
-  version: 1;
-  source: "mediapipe";
-  landmarks: Array<{ x: number; y: number; z?: number; visibility?: number }>;
-};
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
-
-function safeArr(v: any): string[] {
-  return Array.isArray(v)
-    ? v
-        .map((x) => (typeof x === "string" ? x : String(x)))
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : [];
-}
-
-function ensureMinDrills(drills: string[]) {
-  const d = (drills || []).filter(Boolean);
-  if (d.length >= 3) return d.slice(0, 6);
-
-  const fallback = [
-    "3×10: win inside tie → angle-step → short snap (no long pull).",
-    "2×2 min: partner sprawls on cue → you re-grip + re-angle immediately (no reset).",
-    "2×3 min: hand-fight rounds — forehead pressure + elbows in, feet always moving.",
-  ];
-  return [...d, ...fallback].slice(0, 6);
-}
-
-function normalizeOverlay(raw: any): Overlay {
-  const linesRaw = Array.isArray(raw?.lines) ? raw.lines : [];
-  const pointsRaw = Array.isArray(raw?.points) ? raw.points : [];
-
-  const normPt = (p: any): [number, number] => {
-    const x = clamp(Number(p?.[0] ?? p?.x ?? 0.5) || 0.5, 0, 1);
-    const y = clamp(Number(p?.[1] ?? p?.y ?? 0.5) || 0.5, 0, 1);
-    return [x, y];
-  };
-
-  const lines = linesRaw
-    .map((l: any) => ({
-      a: normPt(l?.a ?? l?.from),
-      b: normPt(l?.b ?? l?.to),
-      label: typeof l?.label === "string" ? l.label.slice(0, 36) : undefined,
-      tone: l?.tone === "good" || l?.tone === "bad" || l?.tone === "neutral" ? l.tone : "neutral",
-    }))
-    .slice(0, 14);
-
-  const points = pointsRaw
-    .map((p: any) => ({
-      p: normPt(p?.p ?? p?.point),
-      label: typeof p?.label === "string" ? p.label.slice(0, 36) : undefined,
-      tone: p?.tone === "good" || p?.tone === "bad" || p?.tone === "neutral" ? p.tone : "neutral",
-    }))
-    .slice(0, 16);
-
-  return { lines, points };
-}
-
-function overlayFromPose(pose: PosePacket): Overlay {
-  const lm = pose?.landmarks || [];
-  const pt = (i: number): [number, number] => {
-    const p = lm[i] || { x: 0.5, y: 0.5 };
-    return [clamp(Number(p.x) || 0.5, 0, 1), clamp(Number(p.y) || 0.5, 0, 1)];
-  };
-
-  // Same connections as client
-  const P = {
-    nose: 0,
-    lShoulder: 11,
-    rShoulder: 12,
-    lElbow: 13,
-    rElbow: 14,
-    lWrist: 15,
-    rWrist: 16,
-    lHip: 23,
-    rHip: 24,
-    lKnee: 25,
-    rKnee: 26,
-    lAnkle: 27,
-    rAnkle: 28,
-  };
-
-  return {
-    lines: [
-      { a: pt(P.lShoulder), b: pt(P.rShoulder), tone: "neutral", label: "Shoulders" },
-      { a: pt(P.lHip), b: pt(P.rHip), tone: "neutral", label: "Hips" },
-      { a: pt(P.lShoulder), b: pt(P.lElbow), tone: "neutral" },
-      { a: pt(P.lElbow), b: pt(P.lWrist), tone: "neutral" },
-      { a: pt(P.rShoulder), b: pt(P.rElbow), tone: "neutral" },
-      { a: pt(P.rElbow), b: pt(P.rWrist), tone: "neutral" },
-      { a: pt(P.lHip), b: pt(P.lKnee), tone: "neutral" },
-      { a: pt(P.lKnee), b: pt(P.lAnkle), tone: "neutral" },
-      { a: pt(P.rHip), b: pt(P.rKnee), tone: "neutral" },
-      { a: pt(P.rKnee), b: pt(P.rAnkle), tone: "neutral" },
-      { a: pt(P.lShoulder), b: pt(P.lHip), tone: "neutral" },
-      { a: pt(P.rShoulder), b: pt(P.rHip), tone: "neutral" },
-    ],
-    points: [
-      { p: pt(P.nose), tone: "neutral" },
-      { p: pt(P.lShoulder), tone: "neutral" },
-      { p: pt(P.rShoulder), tone: "neutral" },
-      { p: pt(P.lHip), tone: "neutral" },
-      { p: pt(P.rHip), tone: "neutral" },
-      { p: pt(P.lKnee), tone: "neutral" },
-      { p: pt(P.rKnee), tone: "neutral" },
-      { p: pt(P.lAnkle), tone: "neutral" },
-      { p: pt(P.rAnkle), tone: "neutral" },
-    ],
-  };
-}
-
-function normalizeVision(raw: any): Omit<VisionResult, "repetitionCount" | "scoreDelta"> {
-  const grade = clamp(Number(raw?.gradePercent ?? 0) || 0, 0, 100);
-
-  const errorCode =
-    typeof raw?.errorCode === "string" && raw.errorCode.trim() ? raw.errorCode.trim().toUpperCase() : "UNKNOWN";
-  const biomechCategory =
-    typeof raw?.biomechCategory === "string" && raw.biomechCategory.trim()
-      ? raw.biomechCategory.trim().toLowerCase()
-      : "unknown";
-  const severity = clamp(Number(raw?.severity ?? 50) || 50, 0, 100);
-
-  const right = safeArr(raw?.right);
-  const wrong = safeArr(raw?.wrong);
-  const drills = ensureMinDrills(safeArr(raw?.drills));
-  const safety = safeArr(raw?.safety);
-  const questions = safeArr(raw?.questions);
-  const tags = safeArr(raw?.tags);
-  const overlay = normalizeOverlay(raw?.overlay ?? raw?.annotations ?? {});
-
-  return {
-    ok: true,
-    errorCode,
-    biomechCategory,
-    severity,
-    primaryError: typeof raw?.primaryError === "string" && raw.primaryError.trim() ? raw.primaryError.trim() : "—",
-    smallestCue: typeof raw?.smallestCue === "string" && raw.smallestCue.trim() ? raw.smallestCue.trim() : "—",
-    right: right.length ? right : ["—"],
-    wrong: wrong.length ? wrong : ["—"],
-    hindrance: typeof raw?.hindrance === "string" && raw.hindrance.trim() ? raw.hindrance.trim() : "—",
-    drills,
-    safety,
-    questions,
-    tags,
-    gradePercent: grade,
-    overlay,
-  };
-}
-
-async function fileToDataUrl(file: File) {
-  const buf = Buffer.from(await file.arrayBuffer());
-  const mime = file.type || "image/png";
-  return `data:${mime};base64,${buf.toString("base64")}`;
-}
-
-function computeRepetitionCount(lastSessions: Array<{ error_code: string }>, currentCode: string): number {
-  let streak = 0;
-  for (const s of lastSessions) {
-    if ((s.error_code || "").toUpperCase() === currentCode.toUpperCase()) streak++;
-    else break;
+    return [
+      "balance",
+      "guard_position",
+      "hip_turn",
+      "posture",
+      "range_control",
+      "recovery",
+    ];
   }
-  return streak;
+
+  if (d === "wrestling") {
+    if (t.includes("double leg") || t.includes("shot") || t.includes("entry") || t.includes("level change")) {
+      return [
+        "level_change",
+        "penetration_step",
+        "head_position",
+        "rear_leg_drive",
+        "knee_line",
+        "posture",
+      ];
+    }
+
+    if (t.includes("sprawl")) {
+      return [
+        "hip_pressure",
+        "leg_kickback",
+        "chest_weight",
+        "head_control",
+        "base_width",
+      ];
+    }
+
+    return [
+      "base_integrity",
+      "head_position",
+      "pressure",
+      "posture",
+      "balance",
+      "timing",
+    ];
+  }
+
+  if (d === "grappling") {
+    return [
+      "hip_position",
+      "base",
+      "weight_distribution",
+      "head_position",
+      "control_points",
+      "balance",
+    ];
+  }
+
+  if (d === "clinch") {
+    return [
+      "head_position",
+      "posture",
+      "frames",
+      "underhook_position",
+      "balance",
+      "pressure",
+    ];
+  }
+
+  return ["unknown"];
 }
 
-function computeAdaptiveGrade(baseGrade: number, repetitionStreak: number, prevGrade: number | null) {
-  const repetitionPenalty = repetitionStreak >= 2 ? Math.min(12, (repetitionStreak - 1) * 4) : 0;
-  const delta = prevGrade == null ? null : baseGrade - prevGrade;
-  const improvementBonus = delta != null && delta > 0 ? Math.min(6, Math.floor(delta / 5) * 2) : 0;
+function buildPrompt(input: {
+  clipLabel: string;
+  sport: string;
+  notes: string;
+}) {
+  return `
+You are SenseiVision for combat sports.
 
-  const final = clamp(baseGrade - repetitionPenalty + improvementBonus, 0, 100);
-  return { final, delta };
-}
+You must analyze the uploaded frame in this exact order:
+1. Detect the discipline shown in the image.
+2. Detect the technique shown in the image.
+3. Restrict corrections to the matching technique family only.
+4. Output strict JSON only.
 
-function supaAdmin() {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return null;
-  return createClient(url, key, { auth: { persistSession: false } });
-}
+Rules:
+- If the frame is a striking frame (for example high kick, jab, cross, round kick), do NOT give wrestling, takedown, sprawl, hand-fight, re-shot, level-change, or cage-entry corrections.
+- If the frame is a wrestling frame, do NOT give kicking or striking mechanics.
+- If confidence is low, say so clearly and keep the fix conservative.
+- The output must be frame-grounded, not generic MMA advice.
+- If user notes mention a high kick or kicking form, strongly bias toward striking unless the image clearly contradicts it.
 
-async function getUserIdFromRequest(req: Request): Promise<string | null> {
-  const url = process.env.SUPABASE_URL;
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anon) return null;
+Context:
+- Clip label: ${input.clipLabel}
+- User selected sport: ${input.sport}
+- User note: ${input.notes || "No note"}
 
-  const supa = createClient(url, anon, { auth: { persistSession: false } });
-  const authHeader = req.headers.get("authorization");
-  if (!authHeader) return null;
-
-  const token = authHeader.replace("Bearer ", "").trim();
-  if (!token) return null;
-
-  const { data } = await supa.auth.getUser(token);
-  return data?.user?.id ?? null;
-}
-
-async function callOpenAIAnalyze(context: string, dataUrl: string, memory: any, pose?: PosePacket | null) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
-
-  const model = process.env.OPENAI_VISION_MODEL || "gpt-4.1-mini";
-
-  const system = `
-You are Sensei Vision for serious fighters.
-Return STRICT JSON ONLY. No markdown. No extra text.
-
-Schema:
+Return JSON with these exact fields:
 {
-  "errorCode": string,
-  "biomechCategory": string,
-  "severity": number,
-
-  "gradePercent": number,
-  "primaryError": string,
-  "smallestCue": string,
-
-  "right": string[],
-  "wrong": string[],
-  "hindrance": string,
-
-  "drills": string[],
-  "safety": string[],
-  "questions": string[],
-  "tags": string[],
-
-  "overlay": {
-    "lines": [{"a":[x,y],"b":[x,y],"label":string,"tone":"good"|"bad"|"neutral"}],
-    "points":[{"p":[x,y],"label":string,"tone":"good"|"bad"|"neutral"}]
-  }
-}
-
-Rules:
-- smallestCue = one sentence, actionable.
-- wrong = 3–6 bullets, concrete.
-- drills MUST be 3–6.
-- overlay coordinates normalized 0..1.
-- If pose landmarks are provided, align feedback with them (do not hallucinate posture opposite to pose).
-`.trim();
-
-  const input = [
-    { role: "system", content: system },
+  "analysis_id": "string",
+  "clipLabel": "string",
+  "discipline_detected": "striking | wrestling | grappling | clinch | unknown",
+  "technique_detected": "string",
+  "confidence": "low | med | high",
+  "allowed_fix_family": ["string"],
+  "what_you_did_right": ["string"],
+  "primary_error": "string",
+  "why_it_matters": "string",
+  "one_fix": "string",
+  "drills": ["string"],
+  "safety": ["string"],
+  "findings": [
     {
-      role: "user",
-      content: [
-        { type: "input_text", text: `Context: ${context}` },
-        { type: "input_text", text: `Memory: ${JSON.stringify(memory).slice(0, 2000)}` },
-        pose ? { type: "input_text", text: `PoseLandmarks (mediapipe): ${JSON.stringify(pose).slice(0, 3500)}` } : null,
-        { type: "input_image", image_url: dataUrl },
-      ].filter(Boolean),
+      "id": "string",
+      "title": "string",
+      "severity": "LOW | MEDIUM | HIGH",
+      "detail": "string"
+    }
+  ]
+}
+`.trim();
+}
+
+function responseSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      analysis_id: { type: "string" },
+      clipLabel: { type: "string" },
+      discipline_detected: {
+        type: "string",
+        enum: ["striking", "wrestling", "grappling", "clinch", "unknown"],
+      },
+      technique_detected: { type: "string" },
+      confidence: { type: "string", enum: ["low", "med", "high"] },
+      allowed_fix_family: {
+        type: "array",
+        items: { type: "string" },
+      },
+      what_you_did_right: {
+        type: "array",
+        items: { type: "string" },
+      },
+      primary_error: { type: "string" },
+      why_it_matters: { type: "string" },
+      one_fix: { type: "string" },
+      drills: {
+        type: "array",
+        items: { type: "string" },
+      },
+      safety: {
+        type: "array",
+        items: { type: "string" },
+      },
+      findings: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            id: { type: "string" },
+            title: { type: "string" },
+            severity: { type: "string", enum: ["LOW", "MEDIUM", "HIGH"] },
+            detail: { type: "string" },
+          },
+          required: ["id", "title", "severity", "detail"],
+        },
+      },
     },
+    required: [
+      "analysis_id",
+      "clipLabel",
+      "discipline_detected",
+      "technique_detected",
+      "confidence",
+      "allowed_fix_family",
+      "what_you_did_right",
+      "primary_error",
+      "why_it_matters",
+      "one_fix",
+      "drills",
+      "safety",
+      "findings",
+    ],
+  } as const;
+}
+
+function hasStrikingTechnique(technique: string) {
+  const t = technique.toLowerCase();
+  return (
+    t.includes("kick") ||
+    t.includes("jab") ||
+    t.includes("cross") ||
+    t.includes("hook") ||
+    t.includes("uppercut") ||
+    t.includes("teep") ||
+    t.includes("knee")
+  );
+}
+
+function containsWrestlingLanguage(text: string) {
+  const s = text.toLowerCase();
+  const blocked = [
+    "level change",
+    "penetration step",
+    "double leg",
+    "single leg",
+    "re-shot",
+    "sprawl",
+    "hand fight",
+    "underhook",
+    "cage entry",
+    "shot entry",
   ];
-
-  const r = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model, input, temperature: 0.15, max_output_tokens: 900 }),
-  });
-
-  const rawText = await r.text();
-  if (!r.ok) throw new Error(`OpenAI error (${r.status}): ${rawText.slice(0, 400)}`);
-
-  const envelope = JSON.parse(rawText);
-  const outText =
-    typeof envelope?.output_text === "string"
-      ? envelope.output_text.trim()
-      : Array.isArray(envelope?.output)
-      ? envelope.output
-          .flatMap((o: any) => o?.content || [])
-          .map((c: any) => c?.text)
-          .filter(Boolean)
-          .join("\n")
-          .trim()
-      : "";
-
-  const parsed = JSON.parse(outText);
-  return normalizeVision(parsed);
+  return blocked.some((x) => s.includes(x));
 }
 
-async function callOpenAITighten(question: string, lastResult: any, memory: any) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
+function sanitizeAnalysis(a: VisionAnalysis): VisionAnalysis {
+  const mergedText = [
+    a.primary_error,
+    a.why_it_matters,
+    a.one_fix,
+    ...(Array.isArray(a.drills) ? a.drills : []),
+    ...(Array.isArray(a.safety) ? a.safety : []),
+    ...(Array.isArray(a.findings) ? a.findings.map((f) => `${f.title} ${f.detail}`) : []),
+  ].join(" ");
 
-  const model = process.env.OPENAI_TEXT_MODEL || "gpt-4.1-mini";
+  const shouldBlockWrestlingLanguage =
+    a.discipline_detected === "striking" || hasStrikingTechnique(a.technique_detected);
 
-  const system = `
-You are Sensei Tighten.
-One question. One answer. One variable.
-Return STRICT JSON ONLY: { "reply": string }
-
-Rules:
-- 2–6 lines max.
-- No fluff. No hype.
-- Reference memory if it matters.
-- If question is vague, force it into ONE variable and give the next sharp question.
-`.trim();
-
-  const user = `
-Last analysis:
-${JSON.stringify(lastResult).slice(0, 2500)}
-
-Memory:
-${JSON.stringify(memory).slice(0, 2000)}
-
-User question:
-${question}
-`.trim();
-
-  const r = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      input: [
-        { role: "system", content: system },
-        { role: "user", content: user },
+  if (shouldBlockWrestlingLanguage && containsWrestlingLanguage(mergedText)) {
+    return {
+      ...a,
+      primary_error: "Support foot and hip mechanics are not aligned with the kick.",
+      why_it_matters:
+        "If the base foot and hip do not open correctly, height and power leak while balance gets worse.",
+      one_fix:
+        "Turn the support foot earlier and let the hip open before forcing full extension.",
+      drills: [
+        "Wall-supported slow high-kick reps",
+        "Support-foot pivot reps",
+        "Chamber → extend → retract control reps",
       ],
-      temperature: 0.2,
-      max_output_tokens: 250,
-    }),
-  });
-
-  const rawText = await r.text();
-  if (!r.ok) throw new Error(`OpenAI tighten error (${r.status}): ${rawText.slice(0, 400)}`);
-
-  const envelope = JSON.parse(rawText);
-  const outText =
-    typeof envelope?.output_text === "string"
-      ? envelope.output_text.trim()
-      : Array.isArray(envelope?.output)
-      ? envelope.output
-          .flatMap((o: any) => o?.content || [])
-          .map((c: any) => c?.text)
-          .filter(Boolean)
-          .join("\n")
-          .trim()
-      : "";
-
-  const parsed = JSON.parse(outText);
-  return { reply: typeof parsed?.reply === "string" ? parsed.reply : "Ask one sharper question." };
-}
-
-function progressionDrills(baseDrills: string[], repetitionStreak: number, delta: number | null) {
-  const drills = [...baseDrills];
-
-  if (repetitionStreak >= 2) {
-    drills.unshift("REGRESS: 3×8 — angle-step only. No snap. Win position first.");
-  } else if (delta != null && delta >= 8) {
-    drills.unshift("PROGRESS: 3×2 min — live tie-ups into snap/shot chain (no reset).");
-  } else if (delta != null && delta > 0) {
-    drills.unshift("STABILIZE: 2×2 min — tempo reps (slow entry, fast cue).");
+      safety: [
+        "Do not force height before the hip opens.",
+        "Keep the base leg stable before chasing speed.",
+      ],
+      findings: [
+        {
+          id: "f1",
+          title: "Kick mechanics mismatch",
+          severity: "HIGH",
+          detail: "The frame reads as striking, so corrections are restricted to kick mechanics only.",
+        },
+      ],
+      allowed_fix_family: buildAllowedFixFamily(a.technique_detected, "striking"),
+    };
   }
 
-  return drills.slice(0, 6);
+  return a;
+}
+
+function normalizeAnalysis(analysis: Partial<VisionAnalysis>, clipLabel: string): VisionAnalysis {
+  const discipline = analysis.discipline_detected ?? "unknown";
+  const technique = analysis.technique_detected ?? "unknown";
+
+  return {
+    analysis_id:
+      typeof analysis.analysis_id === "string" && analysis.analysis_id.trim()
+        ? analysis.analysis_id
+        : crypto.randomUUID(),
+    clipLabel:
+      typeof analysis.clipLabel === "string" && analysis.clipLabel.trim()
+        ? analysis.clipLabel
+        : clipLabel,
+    discipline_detected: discipline,
+    technique_detected: technique,
+    confidence: analysis.confidence ?? "low",
+    allowed_fix_family: Array.isArray(analysis.allowed_fix_family)
+      ? analysis.allowed_fix_family
+      : buildAllowedFixFamily(technique, discipline),
+    what_you_did_right: Array.isArray(analysis.what_you_did_right)
+      ? analysis.what_you_did_right
+      : [],
+    primary_error:
+      typeof analysis.primary_error === "string"
+        ? analysis.primary_error
+        : "No primary error returned.",
+    why_it_matters:
+      typeof analysis.why_it_matters === "string"
+        ? analysis.why_it_matters
+        : "No explanation returned.",
+    one_fix:
+      typeof analysis.one_fix === "string"
+        ? analysis.one_fix
+        : "No fix returned.",
+    drills: Array.isArray(analysis.drills) ? analysis.drills : [],
+    safety: Array.isArray(analysis.safety) ? analysis.safety : [],
+    findings: Array.isArray(analysis.findings) ? analysis.findings : [],
+  };
 }
 
 export async function POST(req: Request) {
   try {
-    const contentType = req.headers.get("content-type") || "";
+    const body = await req.json();
+    const parsed = RequestSchema.safeParse(body);
 
-    // Tighten JSON
-    if (contentType.includes("application/json")) {
-      const body = await req.json().catch(() => ({}));
-      if (String(body?.mode || "").trim() !== "tighten") {
-        return NextResponse.json({ error: "Invalid request (expected {mode:'tighten'})" }, { status: 400 });
-      }
-
-      const question = String(body?.question || "").trim();
-      const lastResult = body?.lastResult || null;
-
-      if (!question) return NextResponse.json({ error: "Missing question" }, { status: 400 });
-      if (!lastResult) return NextResponse.json({ error: "Missing lastResult" }, { status: 400 });
-
-      const userId = await getUserIdFromRequest(req);
-      const admin = supaAdmin();
-
-      let memory: any = {};
-      if (userId && admin) {
-        const { data } = await admin
-          .from("sensei_vision_sessions")
-          .select("created_at,error_code,grade_percent,severity,biomech_category")
-          .eq("user_id", userId)
-          .order("created_at", { ascending: false })
-          .limit(6);
-
-        memory = { recentSessions: data ?? [] };
-      }
-
-      const out = await callOpenAITighten(question, lastResult, memory);
-      return NextResponse.json(out);
+    if (!parsed.success) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: parsed.error.message,
+        },
+        { status: 400 }
+      );
     }
 
-    // Analyze multipart
-    if (!contentType.includes("multipart/form-data")) {
-      return NextResponse.json({ error: "Invalid request (expected multipart/form-data analyze or JSON tighten)" }, { status: 400 });
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Missing OPENAI_API_KEY on the server.",
+        },
+        { status: 500 }
+      );
     }
 
-    const form = await req.formData();
-    const context = String(form.get("context") || "").trim();
-    const image = form.get("image");
-    const poseRaw = form.get("pose"); // OPTIONAL now
+    const prompt = buildPrompt(parsed.data);
 
-    if (!context) return NextResponse.json({ error: "Missing context" }, { status: 400 });
-    if (!(image instanceof File)) return NextResponse.json({ error: "Missing image (field 'image')" }, { status: 400 });
+    const imageDataUrl = parsed.data.imageBase64.startsWith("data:")
+      ? parsed.data.imageBase64
+      : `data:image/jpeg;base64,${parsed.data.imageBase64}`;
 
-    let pose: PosePacket | null = null;
-    if (typeof poseRaw === "string" && poseRaw.trim()) {
-      try {
-        const parsed = JSON.parse(poseRaw);
-        if (parsed?.version === 1 && parsed?.source === "mediapipe" && Array.isArray(parsed?.landmarks)) {
-          pose = parsed as PosePacket;
-        }
-      } catch {
-        // ignore malformed pose
-        pose = null;
-      }
+    const resp = await openai.responses.create({
+      model: "gpt-5.1",
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: prompt },
+            {
+              type: "input_image",
+              image_url: imageDataUrl,
+            },
+          ],
+        },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "sensei_vision_analysis",
+          schema: responseSchema(),
+          strict: true,
+        },
+      },
+    } as any);
+
+    const raw = String((resp as any).output_text ?? "").trim();
+
+    if (!raw) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "SenseiVision returned empty output.",
+        },
+        { status: 500 }
+      );
     }
 
-    const dataUrl = await fileToDataUrl(image);
-
-    const userId = await getUserIdFromRequest(req);
-    const admin = supaAdmin();
-
-    let recent: any[] = [];
-    if (userId && admin) {
-      const { data } = await admin
-        .from("sensei_vision_sessions")
-        .select("created_at,error_code,grade_percent,severity,biomech_category")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false })
-        .limit(7);
-
-      recent = data ?? [];
+    let parsedAnalysis: Partial<VisionAnalysis>;
+    try {
+      parsedAnalysis = JSON.parse(raw) as Partial<VisionAnalysis>;
+    } catch {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "SenseiVision returned invalid JSON.",
+          raw,
+        },
+        { status: 500 }
+      );
     }
 
-    const memory = { recentSessions: recent };
+    let analysis = normalizeAnalysis(parsedAnalysis, parsed.data.clipLabel);
+    analysis = sanitizeAnalysis(analysis);
 
-    const base = await callOpenAIAnalyze(context, dataUrl, memory, pose);
+    return NextResponse.json({
+      ok: true,
+      analysis,
+    });
+  } catch (err: any) {
+    console.error("SenseiVision route crashed:", err);
 
-    const repetitionStreak = computeRepetitionCount(recent as any[], base.errorCode);
-    const prevGrade = recent?.[0]?.grade_percent ?? null;
-    const { final, delta } = computeAdaptiveGrade(base.gradePercent, repetitionStreak, typeof prevGrade === "number" ? prevGrade : null);
-
-    const drills = progressionDrills(base.drills, repetitionStreak, delta);
-
-    // If pose exists: force overlay lines from pose so it never comes back empty.
-    const forcedOverlay = pose ? overlayFromPose(pose) : base.overlay;
-
-    const result: VisionResult = {
-      ...base,
-      overlay: forcedOverlay,
-      gradePercent: final,
-      repetitionCount: repetitionStreak,
-      scoreDelta: delta,
-      drills,
-    };
-
-    if (userId && admin) {
-      await admin.from("sensei_vision_sessions").insert({
-        user_id: userId,
-        context,
-        error_code: result.errorCode,
-        biomech_category: result.biomechCategory,
-        severity: result.severity,
-        grade_percent: result.gradePercent,
-        repetition_count: result.repetitionCount,
-        cue: result.smallestCue,
-        primary_error: result.primaryError,
-        hindrance: result.hindrance,
-        drills: result.drills,
-        safety: result.safety,
-        tags: result.tags,
-        overlay: result.overlay,
-      });
-    }
-
-    return NextResponse.json(result);
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Unknown error" }, { status: 500 });
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          typeof err?.message === "string"
+            ? err.message
+            : "SenseiVision backend crashed.",
+        raw:
+          typeof err?.toString === "function"
+            ? err.toString()
+            : undefined,
+      },
+      { status: 500 }
+    );
   }
 }

@@ -37,6 +37,7 @@ export type GymCandidate = {
   bestFor: string[];
   watchOut: string[];
   href?: string;
+  verified?: boolean;
 };
 
 export type CampControl = {
@@ -50,6 +51,8 @@ export type SenseiSystemStatus = {
   visionLabel: string;
   fuelConnected: boolean;
   fuelLabel: string;
+  campSaved: boolean;
+  campLabel: string;
 };
 
 export type AskSectionId = "all" | "directive" | "training" | "control" | "gyms";
@@ -190,17 +193,13 @@ function stageLabel(stage: BuildStage): string {
   }
 }
 
-function BuildRitual({
-  stage,
-}: {
-  stage: BuildStage;
-}) {
+function BuildRitual({ stage }: { stage: BuildStage }) {
   const steps: Array<{ key: BuildStage; label: string }> = [
-    { key: "READING_CONTEXT", label: "Reading latest Vision context" },
+    { key: "READING_CONTEXT", label: "Reading latest Vision + profile context" },
     { key: "SETTING_DIRECTIVE", label: "Locking weekly directive" },
-    { key: "BUILDING_TRAINING", label: "Mapping training focus" },
+    { key: "BUILDING_TRAINING", label: "Mapping training priorities" },
     { key: "SETTING_CONTROL", label: "Setting load, warnings, next step" },
-    { key: "RANKING_GYMS", label: "Ranking gym support options" },
+    { key: "RANKING_GYMS", label: "Ranking real gym support from Supabase" },
   ];
 
   const currentIndex = steps.findIndex((s) => s.key === stage);
@@ -221,6 +220,7 @@ function BuildRitual({
         {steps.map((step, idx) => {
           const done = idx < currentIndex;
           const active = idx === currentIndex;
+
           return (
             <div
               key={step.key}
@@ -252,8 +252,76 @@ function BuildRitual({
       </div>
 
       <div className="mt-3 text-xs text-slate-300/60">
-        Sensei is assembling the directive first, then training, then control, then gym support.
+        Sensei builds the camp first. Gyms are ranked after the directive is set.
       </div>
+    </div>
+  );
+}
+
+function CompactGymCard({
+  gym,
+  defaultOpen = false,
+}: {
+  gym: GymCandidate;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-start justify-between gap-3 px-4 py-4 text-left"
+      >
+        <div>
+          <div className="text-sm font-semibold text-slate-50">{gym.name}</div>
+          <div className="mt-1 text-xs text-slate-300/70">{gym.location ?? "Location not set"}</div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {gym.verified ? <Badge tone="good">Verified</Badge> : null}
+          <Badge tone={gym.compatibility >= 90 ? "good" : gym.compatibility >= 80 ? "warn" : "neutral"}>
+            {gym.compatibility}% match
+          </Badge>
+          <span className="text-xs text-slate-400">{open ? "−" : "+"}</span>
+        </div>
+      </button>
+
+      {open ? (
+        <div className="border-t border-slate-800/50 px-4 py-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Reason</div>
+              <div className="mt-2">
+                <Bullets items={gym.reason} />
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Best for</div>
+              <div className="mt-2">
+                <Bullets items={gym.bestFor} />
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 rounded-xl border border-slate-800/60 bg-slate-950/30 p-3">
+            <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Watch out</div>
+            <div className="mt-2">
+              <Bullets items={gym.watchOut} />
+            </div>
+          </div>
+
+          {gym.href ? (
+            <div className="mt-3">
+              <Link className="text-xs text-emerald-200 underline" href={gym.href}>
+                Open gym profile →
+              </Link>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -332,10 +400,8 @@ export default function SenseiScreen(props: {
       ? props.chatMessages
       : props.chatMessages.filter((m) => m.section === props.activeChatSection);
 
-  const topGym = useMemo(() => {
-    if (!props.gyms?.length) return null;
-    return [...props.gyms].sort((a, b) => b.compatibility - a.compatibility)[0] ?? null;
-  }, [props.gyms]);
+  const topGym = useMemo(() => props.gyms[0] ?? null, [props.gyms]);
+  const secondaryGyms = useMemo(() => props.gyms.slice(1, 3), [props.gyms]);
 
   const campSummary = useMemo(() => {
     return {
@@ -368,11 +434,10 @@ export default function SenseiScreen(props: {
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          {/* LEFT */}
           <div className="lg:col-span-5 space-y-6">
             <Card
               title="Camp inputs"
-              sub="Build the next 7 days. Sensei uses your style, constraints, and latest Vision context if available."
+              sub="Build the next 7 days from your profile, latest Vision context, and constraints."
               right={<Badge tone="neutral">Camp builder</Badge>}
             >
               <div className="space-y-4">
@@ -459,14 +524,14 @@ export default function SenseiScreen(props: {
                 </div>
 
                 <div className="text-xs text-slate-300/60">
-                  Build camp first. Gym recommendations are support, not the main event.
+                  The camp is primary. Gyms are support inside their own tab.
                 </div>
               </div>
             </Card>
 
             <Card
               title="System status"
-              sub="Light continuity between tools. Sensei reads recent context when it exists."
+              sub="Sensei reads recent tool context and remembers the latest camp."
               right={<Badge tone="neutral">AI status</Badge>}
             >
               <div className="grid gap-3">
@@ -509,11 +574,22 @@ export default function SenseiScreen(props: {
                     </div>
                   </div>
                 </div>
+
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.22em] text-slate-400/70">Camp memory</div>
+                      <div className="mt-1 text-sm text-slate-100">{props.systemStatus.campLabel}</div>
+                    </div>
+                    <Badge tone={props.systemStatus.campSaved ? "good" : "warn"}>
+                      {props.systemStatus.campSaved ? "Saved" : "Not saved"}
+                    </Badge>
+                  </div>
+                </div>
               </div>
             </Card>
           </div>
 
-          {/* RIGHT */}
           <div className="lg:col-span-7 space-y-6">
             <Card
               title="Camp summary"
@@ -551,7 +627,7 @@ export default function SenseiScreen(props: {
 
             <Card
               title="Camp output"
-              sub="Directive first. Gyms stay separate as support."
+              sub="Directive first. Tabs keep the camp easy to read."
               right={
                 props.busy ? (
                   <Badge tone="warn">{stageLabel(props.buildStage)}</Badge>
@@ -677,56 +753,36 @@ export default function SenseiScreen(props: {
 
                     {activeOutputTab === "gyms" && (
                       <>
-                        {!topGym ? (
+                        {!props.gyms.length ? (
                           <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
-                            Build camp to generate a gym recommendation.
+                            No real gym recommendations yet. Add gyms in Supabase and make sure RLS allows read access.
                           </div>
                         ) : (
-                          <div className="space-y-3">
-                            <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <div className="text-sm font-semibold text-slate-50">{topGym.name}</div>
-                                  <div className="mt-1 text-xs text-slate-300/70">{topGym.location ?? "Location not set"}</div>
+                          <div className="space-y-4">
+                            {topGym ? (
+                              <div>
+                                <div className="mb-2 text-[11px] tracking-[0.22em] uppercase text-emerald-200/80">
+                                  Top recommendation
                                 </div>
-                                <Badge tone={topGym.compatibility >= 90 ? "good" : topGym.compatibility >= 80 ? "warn" : "neutral"}>
-                                  {topGym.compatibility}% match
-                                </Badge>
+                                <CompactGymCard gym={topGym} defaultOpen />
                               </div>
+                            ) : null}
 
-                              <div className="mt-3 grid gap-4 md:grid-cols-2">
-                                <div>
-                                  <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Reason</div>
-                                  <div className="mt-2">
-                                    <Bullets items={topGym.reason} />
-                                  </div>
+                            {secondaryGyms.length ? (
+                              <div>
+                                <div className="mb-2 text-[11px] tracking-[0.22em] uppercase text-slate-400/70">
+                                  Other support options
                                 </div>
-                                <div>
-                                  <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Best for</div>
-                                  <div className="mt-2">
-                                    <Bullets items={topGym.bestFor} />
-                                  </div>
+                                <div className="space-y-3">
+                                  {secondaryGyms.map((gym) => (
+                                    <CompactGymCard key={gym.id} gym={gym} />
+                                  ))}
                                 </div>
                               </div>
-
-                              <div className="mt-3 rounded-xl border border-slate-800/60 bg-slate-950/30 p-3">
-                                <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Watch out</div>
-                                <div className="mt-2">
-                                  <Bullets items={topGym.watchOut} />
-                                </div>
-                              </div>
-
-                              {topGym.href ? (
-                                <div className="mt-3">
-                                  <Link className="text-xs text-emerald-200 underline" href={topGym.href}>
-                                    Open gym profile →
-                                  </Link>
-                                </div>
-                              ) : null}
-                            </div>
+                            ) : null}
 
                             <div className="text-xs text-slate-300/60">
-                              Gym recommendation is support. Camp directive stays primary.
+                              Sensei gives one main recommendation first. Other gyms stay secondary.
                             </div>
                           </div>
                         )}

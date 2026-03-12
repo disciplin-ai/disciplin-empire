@@ -1,173 +1,326 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import SenseiVisionScreen, { VisionAnalysis, VisionFinding, VisionSport, VisionStage } from "@/components/SenseiVisionScreen";
+import React, { useMemo, useState } from "react";
+import SenseiVisionScreen from "@/components/SenseiVisionScreen";
+import type { VisionAnalysis, VisionAnalyzeResponse } from "@/lib/senseiVisionTypes";
 
-const VISION_ENDPOINT = "/api/senseiVision"; // adjust to your real endpoint
+type VisionErrorPayload = {
+  ok?: boolean;
+  error?: string;
+  raw?: string;
+};
+
+export type VisionBuildStage =
+  | "IDLE"
+  | "READING_FRAME"
+  | "DETECTING_DISCIPLINE"
+  | "DETECTING_TECHNIQUE"
+  | "RESTRICTING_FIXES"
+  | "BUILDING_CORRECTION"
+  | "DONE"
+  | "ERROR";
+
+export type VisionChatMessage = {
+  id: string;
+  role: "user" | "vision" | "system";
+  text: string;
+  ts: number;
+};
+
+async function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      resolve(String(reader.result || ""));
+    };
+
+    reader.onerror = () => reject(new Error("Failed to read file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function isVisionSuccess(data: unknown): data is { ok: true; analysis: VisionAnalysis } {
+  if (!data || typeof data !== "object") return false;
+  if (!("ok" in data) || (data as { ok?: unknown }).ok !== true) return false;
+  return "analysis" in data;
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function uid() {
   return Math.random().toString(36).slice(2);
 }
 
-function now() {
-  return Date.now();
+function buildVisionReply(question: string, analysis: VisionAnalysis | null): string {
+  if (!analysis) {
+    return "Run an analysis first. Vision only answers questions about the current frame.";
+  }
+
+  const q = question.toLowerCase().trim();
+  const technique = analysis.technique_detected || "the current technique";
+  const primaryError = analysis.primary_error || "the main mechanical issue";
+  const why = analysis.why_it_matters || "it affects efficiency and control";
+  const oneFix = analysis.one_fix || "clean up the main error first";
+  const drills = Array.isArray(analysis.drills) ? analysis.drills : [];
+  const positives = Array.isArray(analysis.what_you_did_right) ? analysis.what_you_did_right : [];
+  const safety = Array.isArray(analysis.safety) ? analysis.safety : [];
+  const allowed = Array.isArray(analysis.allowed_fix_family) ? analysis.allowed_fix_family : [];
+
+  if (q.includes("why") || q.includes("matter")) {
+    return [
+      `Main issue on this ${technique}: ${primaryError}.`,
+      `Why it matters: ${why}.`,
+      `Do not chase five fixes at once. Clean this first, then re-test the frame.`,
+    ].join("\n");
+  }
+
+  if (q.includes("first") || q.includes("focus") || q.includes("next rep")) {
+    return [
+      `First focus: ${oneFix}.`,
+      `On the next rep, keep your attention on one thing only.`,
+      `Do not add extra changes until this one starts looking cleaner.`,
+    ].join("\n");
+  }
+
+  if (q.includes("drill") || q.includes("train")) {
+    return drills.length
+      ? [
+          `Best drill focus for this frame:`,
+          ...drills.map((d, i) => `${i + 1}. ${d}`),
+          `Start with the slowest, cleanest version first.`,
+        ].join("\n")
+      : `No drills were returned for this frame. Stay with the main fix: ${oneFix}.`;
+  }
+
+  if (q.includes("good") || q.includes("right")) {
+    return positives.length
+      ? [
+          `What was good in this frame:`,
+          ...positives.map((p, i) => `${i + 1}. ${p}`),
+          `Keep these while cleaning the main error.`,
+        ].join("\n")
+      : `Vision did not return strong positives here. Treat this frame mainly as a correction rep.`;
+  }
+
+  if (q.includes("safe") || q.includes("injury") || q.includes("hurt")) {
+    return safety.length
+      ? [
+          `Safety notes for this frame:`,
+          ...safety.map((s, i) => `${i + 1}. ${s}`),
+        ].join("\n")
+      : `No extra safety notes were returned. Stay controlled and do not force range before mechanics are clean.`;
+  }
+
+  if (q.includes("detected") || q.includes("what is this") || q.includes("technique")) {
+    return [
+      `Detected discipline: ${analysis.discipline_detected}.`,
+      `Detected technique: ${technique}.`,
+      allowed.length ? `Allowed fix family: ${allowed.join(", ")}.` : `Allowed fix family was not returned.`,
+    ].join("\n");
+  }
+
+  if (q.includes("simple") || q.includes("simpler") || q.includes("explain")) {
+    return [
+      `Simple version:`,
+      `${primaryError}.`,
+      `${oneFix}.`,
+      `That is the only thing to clean first on this frame.`,
+    ].join("\n");
+  }
+
+  return [
+    `For this frame, stay tied to the main issue: ${primaryError}.`,
+    `Main fix: ${oneFix}.`,
+    `If you want a better answer, ask something specific like: "why does this matter?", "which drill first?", or "what do I focus on next rep?"`,
+  ].join("\n");
 }
-
-function mockAnalysis(sport: VisionSport, clipLabel: string): VisionAnalysis {
-  const findings: VisionFinding[] = [
-    {
-      id: uid(),
-      title: "Entry is telegraphed (level change late)",
-      severity: "HIGH",
-      evidence: ["Head stays high until last step.", "Feet stop before shot; pause gives read.", "Hands reach before hips move."],
-      fix: ["Level change earlier (on the outside step).", "Hands hide the drop (touch → drop).", "Keep hips under you; no reach."],
-      drills: ["Shadow: touch → drop x 30 reps.", "Wall: 5x2 min entries with no pauses.", "Partner (if available): reaction entries—only on cue."],
-    },
-    {
-      id: uid(),
-      title: "Exit discipline weak (hands drop on break)",
-      severity: "MED",
-      evidence: ["On reset, right hand drops below cheek.", "Chin lifts during step-out."],
-      fix: ["Exit with guard locked (cheek touch).", "Step out on angle, not straight back."],
-      drills: ["2-min rounds: 1-2 → exit angle → reset (no drops).", "Mirror drill: guard stays high through exits."],
-    },
-    {
-      id: uid(),
-      title: "Stance width inconsistent under fatigue",
-      severity: "LOW",
-      evidence: ["Rear foot narrows after 20–30s exchanges."],
-      fix: ["Wider base on reset; stop crossing feet."],
-      drills: ["Footwork ladder: 6x1 min with strict stance width.", "Rounds: focus only on base integrity."],
-    },
-  ];
-
-  return {
-    analysis_id: crypto.randomUUID(),
-    created_at: now(),
-    sport,
-    clipLabel: clipLabel || "Untitled clip",
-    summary: "Main issue: telegraphed entries + poor exit guard. Fix timing + guard discipline before adding volume.",
-    findings,
-  };
-}
-
-async function postForm<T>(url: string, fd: FormData): Promise<T> {
-  const res = await fetch(url, { method: "POST", credentials: "include", body: fd });
-  const json = await res.json().catch(() => null);
-  if (!res.ok || !json?.ok) throw new Error(json?.error || `Request failed (${res.status})`);
-  return json as T;
-}
-
-type VisionApiResponse =
-  | { ok: true; analysis: VisionAnalysis }
-  | { ok: false; error: string };
 
 export default function SenseiVisionClient() {
-  const [sport, setSport] = useState<VisionSport>("MMA");
-  const [clipLabel, setClipLabel] = useState("");
+  const [sport, setSport] = useState("MMA");
+  const [clipLabel, setClipLabel] = useState("Frame upload");
   const [notes, setNotes] = useState("");
   const [file, setFile] = useState<File | null>(null);
 
-  const [stage, setStage] = useState<VisionStage>("IDLE");
+  const [running, setRunning] = useState(false);
+  const [buildStage, setBuildStage] = useState<VisionBuildStage>("IDLE");
   const [error, setError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<VisionAnalysis | null>(null);
 
-  const abortRef = useRef<AbortController | null>(null);
+  const [chatInput, setChatInput] = useState("");
+  const [chatSending, setChatSending] = useState(false);
+  const [chatMessages, setChatMessages] = useState<VisionChatMessage[]>([
+    {
+      id: uid(),
+      role: "system",
+      text: "Ask about this frame after analysis. Keep questions technical and specific.",
+      ts: Date.now(),
+    },
+  ]);
 
-  const canAnalyze = useMemo(() => !!file && (stage === "IDLE" || stage === "DONE" || stage === "ERROR"), [file, stage]);
-
-  function persistLatest(a: VisionAnalysis) {
-    try {
-      localStorage.setItem("disciplin_latest_vision", JSON.stringify(a));
-    } catch {}
-  }
-
-  function onReset() {
-    abortRef.current?.abort();
-    abortRef.current = null;
-
-    setClipLabel("");
-    setNotes("");
-    setFile(null);
-
-    setError(null);
-    setAnalysis(null);
-    setStage("IDLE");
-  }
+  const quickPrompts = useMemo(
+    () => [
+      "Why is this the main error?",
+      "What do I focus on next rep?",
+      "Which drill should I do first?",
+      "Explain this in simpler terms.",
+    ],
+    []
+  );
 
   async function onAnalyze() {
-    if (!canAnalyze || !file) return;
+    if (!file) {
+      setError("Upload a frame first.");
+      return;
+    }
 
-    abortRef.current?.abort();
-    abortRef.current = new AbortController();
-
+    setRunning(true);
+    setBuildStage("READING_FRAME");
     setError(null);
-    setStage("UPLOADING");
 
     try {
-      // If your backend can analyze images/videos, send multipart.
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("sport", sport);
-      fd.append("clipLabel", clipLabel);
-      fd.append("notes", notes);
+      await delay(180);
+      const imageBase64 = await fileToBase64(file);
 
-      setStage("SENDING_REQUEST");
+      setBuildStage("DETECTING_DISCIPLINE");
+      await delay(220);
 
-      // You can remove this delay—just here to make demo feel intentional.
-      await new Promise((r) => setTimeout(r, 180));
+      setBuildStage("DETECTING_TECHNIQUE");
+      await delay(220);
 
-      setStage("WAITING_OPENAI");
+      setBuildStage("RESTRICTING_FIXES");
+      await delay(220);
 
-      // If endpoint is not ready, we fallback to mock so UI still looks elite.
-      let data: VisionApiResponse | null = null;
+      const res = await fetch("/api/sensei-vision", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sport,
+          clipLabel,
+          notes,
+          imageBase64,
+        }),
+      });
+
+      setBuildStage("BUILDING_CORRECTION");
+
+      const rawText = await res.text();
+
+      let data: VisionAnalyzeResponse | VisionErrorPayload | null = null;
       try {
-        data = await postForm<VisionApiResponse>(VISION_ENDPOINT, fd);
-      } catch (e: any) {
-        // fallback
-        data = { ok: true, analysis: mockAnalysis(sport, clipLabel) };
+        data = rawText ? (JSON.parse(rawText) as VisionAnalyzeResponse | VisionErrorPayload) : null;
+      } catch {
+        data = null;
       }
 
-      setStage("PARSING_RESPONSE");
-      await new Promise((r) => setTimeout(r, 120));
+      if (!res.ok) {
+        const backendError =
+          data && typeof data === "object" && "error" in data && typeof data.error === "string"
+            ? data.error
+            : `Vision request failed (${res.status})`;
 
-      if (!data.ok) {
-        setStage("ERROR");
-        setError(data.error);
+        const backendRaw =
+          data && typeof data === "object" && "raw" in data && typeof data.raw === "string"
+            ? `\n\nRaw: ${data.raw}`
+            : "";
+
+        setBuildStage("ERROR");
+        setError(`${backendError}${backendRaw}`);
         return;
       }
+
+      if (!isVisionSuccess(data)) {
+        const fallbackError =
+          data && typeof data === "object" && "error" in data && typeof data.error === "string"
+            ? data.error
+            : "Vision returned an unexpected response.";
+
+        setBuildStage("ERROR");
+        setError(fallbackError);
+        return;
+      }
+
+      await delay(180);
 
       setAnalysis(data.analysis);
-      persistLatest(data.analysis);
-      setStage("DONE");
-    } catch (e: any) {
-      if (e?.name === "AbortError") {
-        setStage("IDLE");
-        return;
-      }
-      setStage("ERROR");
-      setError(e?.message ?? "SenseiVision failed.");
+      localStorage.setItem("disciplin_latest_vision", JSON.stringify(data.analysis));
+      setBuildStage("DONE");
+      setChatMessages([
+        {
+          id: uid(),
+          role: "system",
+          text: `Frame ready. Ask about ${data.analysis.technique_detected || "this frame"}.`,
+          ts: Date.now(),
+        },
+      ]);
+      setChatInput("");
+    } catch (err: unknown) {
+      setBuildStage("ERROR");
+      setError(err instanceof Error ? err.message : "Vision failed.");
     } finally {
-      abortRef.current = null;
+      setRunning(false);
     }
   }
 
-  function onSendToSensei() {
-    if (!analysis) return;
-    persistLatest(analysis);
-    // Optional: route user to Sensei after sending
-    window.location.href = "/sensei";
+  function onReset() {
+    setSport("MMA");
+    setClipLabel("Frame upload");
+    setNotes("");
+    setFile(null);
+    setRunning(false);
+    setBuildStage("IDLE");
+    setError(null);
+    setAnalysis(null);
+    setChatInput("");
+    setChatSending(false);
+    setChatMessages([
+      {
+        id: uid(),
+        role: "system",
+        text: "Ask about this frame after analysis. Keep questions technical and specific.",
+        ts: Date.now(),
+      },
+    ]);
   }
 
-  // Load last analysis if present (helps “camp control” feel real)
-  useEffect(() => {
+  async function onSendChat() {
+    const text = chatInput.trim();
+    if (!text) return;
+
+    setChatMessages((prev) => [
+      ...prev,
+      { id: uid(), role: "user", text, ts: Date.now() },
+    ]);
+    setChatInput("");
+    setChatSending(true);
+
     try {
-      const raw = localStorage.getItem("disciplin_latest_vision");
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as VisionAnalysis;
-      if (parsed?.analysis_id) setAnalysis(parsed);
-    } catch {}
-  }, []);
+      await delay(180);
+      const reply = buildVisionReply(text, analysis);
+
+      setChatMessages((prev) => [
+        ...prev,
+        { id: uid(), role: "vision", text: reply, ts: Date.now() },
+      ]);
+    } finally {
+      setChatSending(false);
+    }
+  }
+
+  function onChatKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (!chatSending) onSendChat();
+    }
+  }
+
+  function onQuickPrompt(prompt: string) {
+    setChatInput(prompt);
+  }
 
   return (
     <SenseiVisionScreen
@@ -177,15 +330,22 @@ export default function SenseiVisionClient() {
       setClipLabel={setClipLabel}
       notes={notes}
       setNotes={setNotes}
-      file={file}
-      setFile={setFile}
-      stage={stage}
-      error={error}
-      analysis={analysis}
+      selectedFileName={file?.name ?? ""}
+      onFileChange={setFile}
       onAnalyze={onAnalyze}
       onReset={onReset}
-      onSendToSensei={onSendToSensei}
-      canSendToSensei={!!analysis}
+      running={running}
+      buildStage={buildStage}
+      error={error}
+      analysis={analysis}
+      chatInput={chatInput}
+      setChatInput={setChatInput}
+      chatSending={chatSending}
+      chatMessages={chatMessages}
+      onSendChat={onSendChat}
+      onChatKeyDown={onChatKeyDown}
+      quickPrompts={quickPrompts}
+      onQuickPrompt={onQuickPrompt}
     />
   );
 }
