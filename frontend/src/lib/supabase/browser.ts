@@ -30,3 +30,6 @@ export function getSupabaseBrowser(): SupabaseClient {
 
   return browserClient;
 }
+
+// Backward-compatible export for older files still importing `supabaseBrowser`
+export const supabaseBrowser = getSupabaseBrowser();
