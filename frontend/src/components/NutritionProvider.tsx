@@ -9,15 +9,15 @@ import React, {
   useState,
   ReactNode,
 } from "react";
-import { supabaseBrowser } from "../lib/supabase/browser";
+import { getSupabaseBrowser } from "../lib/supabase/browser";
 
 export type NutritionSettings = {
-  goalType: string;       // 'cut' | 'slow_cut' | 'maintain' | 'bulk' | ...
-  timeframeWeeks: number; // 4, 6, 8, etc.
-  mealsPerDay: number;    // 3 / 4 / 5
-  dietStyle: string;      // 'omnivore', 'vegetarian', 'no_pork', ...
-  budgetLevel: string;    // 'low', 'normal', 'high'
-  notes: string;          // free text
+  goalType: string;
+  timeframeWeeks: number;
+  mealsPerDay: number;
+  dietStyle: string;
+  budgetLevel: string;
+  notes: string;
 };
 
 const defaultSettings: NutritionSettings = {
@@ -39,13 +39,13 @@ type NutritionContextType = {
 const NutritionContext = createContext<NutritionContextType | null>(null);
 
 export function NutritionProvider({ children }: { children: ReactNode }) {
-  const supabase = useMemo(() => supabaseBrowser(), []);
+  const supabase = useMemo(() => getSupabaseBrowser(), []);
 
   const [settings, setSettings] = useState<NutritionSettings>(defaultSettings);
   const [loading, setLoading] = useState(true);
 
-  // Keep a ref to the latest settings to avoid stale closures in async functions
   const settingsRef = useRef<NutritionSettings>(defaultSettings);
+
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
@@ -54,18 +54,22 @@ export function NutritionProvider({ children }: { children: ReactNode }) {
     try {
       setLoading(true);
 
-      const { data: userRes, error: userErr } = await supabase.auth.getUser();
-      if (userErr || !userRes?.user) {
+      const {
+        data: { user },
+        error: userErr,
+      } = await supabase.auth.getUser();
+
+      if (userErr || !user) {
         setSettings(defaultSettings);
         return;
       }
 
-      const userId = userRes.user.id;
-
       const { data, error } = await supabase
         .from("nutrition_settings")
-        .select("goal_type, timeframe_weeks, meals_per_day, diet_style, budget_level, notes")
-        .eq("user_id", userId)
+        .select(
+          "goal_type, timeframe_weeks, meals_per_day, diet_style, budget_level, notes"
+        )
+        .eq("user_id", user.id)
         .maybeSingle();
 
       if (error) {
@@ -98,40 +102,40 @@ export function NutritionProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    refresh();
+    void refresh();
 
-    // Keep it in sync if user logs in/out
-    const { data: sub } = supabase.auth.onAuthStateChange(() => {
-      refresh();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(() => {
+      void refresh();
     });
 
     return () => {
-      sub.subscription.unsubscribe();
+      subscription.unsubscribe();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [supabase]);
 
   const saveSettings = async (updates: Partial<NutritionSettings>) => {
-    // Update local state immediately
     setSettings((prev) => ({ ...prev, ...updates }));
 
     try {
-      const { data: userRes, error: userErr } = await supabase.auth.getUser();
-      if (userErr || !userRes?.user) {
+      const {
+        data: { user },
+        error: userErr,
+      } = await supabase.auth.getUser();
+
+      if (userErr || !user) {
         console.warn("[nutrition_settings] save attempted without logged-in user");
         return;
       }
 
-      const userId = userRes.user.id;
-
-      // ✅ use the latest state from ref + updates
       const nextState: NutritionSettings = {
         ...settingsRef.current,
         ...updates,
       };
 
       const row = {
-        user_id: userId,
+        user_id: user.id,
         goal_type: nextState.goalType,
         timeframe_weeks: nextState.timeframeWeeks,
         meals_per_day: nextState.mealsPerDay,
@@ -145,14 +149,18 @@ export function NutritionProvider({ children }: { children: ReactNode }) {
         .from("nutrition_settings")
         .upsert(row, { onConflict: "user_id" });
 
-      if (error) console.warn("[nutrition_settings] upsert error:", error.message);
+      if (error) {
+        console.warn("[nutrition_settings] upsert error:", error.message);
+      }
     } catch (err) {
       console.error("[nutrition_settings] failed to save:", err);
     }
   };
 
   return (
-    <NutritionContext.Provider value={{ settings, loading, saveSettings, refresh }}>
+    <NutritionContext.Provider
+      value={{ settings, loading, saveSettings, refresh }}
+    >
       {children}
     </NutritionContext.Provider>
   );
@@ -160,6 +168,8 @@ export function NutritionProvider({ children }: { children: ReactNode }) {
 
 export function useNutritionSettings() {
   const ctx = useContext(NutritionContext);
-  if (!ctx) throw new Error("useNutritionSettings must be used inside NutritionProvider");
+  if (!ctx) {
+    throw new Error("useNutritionSettings must be used inside NutritionProvider");
+  }
   return ctx;
 }
