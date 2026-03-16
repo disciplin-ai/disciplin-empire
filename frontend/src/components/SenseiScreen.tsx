@@ -56,7 +56,7 @@ export type SenseiSystemStatus = {
 };
 
 export type AskSectionId = "all" | "directive" | "training" | "control" | "gyms";
-export type OutputTabId = "directive" | "training" | "control" | "gyms";
+export type OutputTabId = "directive" | "training" | "control" | "execution" | "gyms";
 
 export type ChatMessage = {
   id: string;
@@ -75,6 +75,20 @@ export type BuildStage =
   | "RANKING_GYMS"
   | "DONE"
   | "ERROR";
+
+export type DailySession = {
+  title: string;
+  durationMin: number;
+  timingLabel: string;
+  goal: string;
+  blocks: string[];
+};
+
+export type ChecklistItem = {
+  id: string;
+  label: string;
+  done: boolean;
+};
 
 /* ========================= UI HELPERS ========================= */
 
@@ -346,6 +360,10 @@ export default function SenseiScreen(props: {
   control: CampControl | null;
   systemStatus: SenseiSystemStatus;
 
+  dailySession: DailySession | null;
+  checklist: ChecklistItem[];
+  onToggleChecklistItem: (id: string) => void;
+
   onBuildCamp: () => void;
   onReset: () => void;
   onOpenVision: () => void;
@@ -380,6 +398,7 @@ export default function SenseiScreen(props: {
     { id: "directive", label: "Directive" },
     { id: "training", label: "Training" },
     { id: "control", label: "Control" },
+    { id: "execution", label: "Execution" },
     { id: "gyms", label: "Gyms" },
   ];
 
@@ -411,6 +430,8 @@ export default function SenseiScreen(props: {
       nextStep: props.control?.nextStep?.[0] ?? "Run Vision, then build camp",
     };
   }, [props.directive, props.trainingFocus, props.control]);
+
+  const completedCount = props.checklist.filter((x) => x.done).length;
 
   return (
     <main className="min-h-[calc(100vh-72px)] pt-24 pb-10">
@@ -749,6 +770,84 @@ export default function SenseiScreen(props: {
                           </div>
                         )}
                       </>
+                    )}
+
+                    {activeOutputTab === "execution" && (
+                      <div className="space-y-4">
+                        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="text-[11px] tracking-[0.22em] uppercase text-emerald-200/80">Daily session</div>
+                              <div className="mt-2 text-sm font-semibold text-slate-50">
+                                {props.dailySession?.title ?? "Build camp to generate the first daily session."}
+                              </div>
+                            </div>
+                            {props.dailySession ? (
+                              <Badge tone="good">{props.dailySession.durationMin} min</Badge>
+                            ) : (
+                              <Badge tone="warn">Pending</Badge>
+                            )}
+                          </div>
+
+                          {props.dailySession ? (
+                            <>
+                              <div className="mt-2 text-sm text-slate-300/80">
+                                {props.dailySession.timingLabel} · Goal: {props.dailySession.goal}
+                              </div>
+                              <div className="mt-3">
+                                <Bullets items={props.dailySession.blocks} />
+                              </div>
+                            </>
+                          ) : null}
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Today’s checklist</div>
+                            <Badge tone={completedCount === props.checklist.length && props.checklist.length > 0 ? "good" : "neutral"}>
+                              {completedCount}/{props.checklist.length} done
+                            </Badge>
+                          </div>
+
+                          {props.checklist.length ? (
+                            <div className="mt-3 space-y-2">
+                              {props.checklist.map((item) => (
+                                <button
+                                  key={item.id}
+                                  type="button"
+                                  onClick={() => props.onToggleChecklistItem(item.id)}
+                                  className={cn(
+                                    "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition",
+                                    item.done
+                                      ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-100"
+                                      : "border-slate-800/60 bg-slate-950/30 text-slate-100 hover:bg-slate-900/30"
+                                  )}
+                                >
+                                  <span
+                                    className={cn(
+                                      "inline-flex h-5 w-5 items-center justify-center rounded border text-xs font-semibold",
+                                      item.done
+                                        ? "border-emerald-400/40 bg-emerald-400/20 text-emerald-200"
+                                        : "border-slate-700/70 bg-slate-950 text-slate-400"
+                                    )}
+                                  >
+                                    {item.done ? "✓" : ""}
+                                  </span>
+                                  <span className="text-sm">{item.label}</span>
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="mt-3 text-sm text-slate-400">
+                              Build camp to generate today’s tasks.
+                            </div>
+                          )}
+
+                          <div className="mt-3 text-xs text-slate-300/60">
+                            Keep it simple. Complete the camp. Then review with Vision and Fuel if needed.
+                          </div>
+                        </div>
+                      </div>
                     )}
 
                     {activeOutputTab === "gyms" && (

@@ -8,6 +8,8 @@ import SenseiScreen, {
   CampControl,
   CampDirective,
   ChatMessage,
+  ChecklistItem,
+  DailySession,
   FocusKey,
   GymCandidate,
   SenseiSystemStatus,
@@ -26,6 +28,8 @@ type SavedCamp = {
   trainingFocus: TrainingFocus | null;
   gyms: GymCandidate[];
   control: CampControl | null;
+  dailySession: DailySession | null;
+  checklist: ChecklistItem[];
   savedAt: number;
 };
 
@@ -61,7 +65,7 @@ function safeParseVision(): VisionAnalysis | null {
     const raw = localStorage.getItem("disciplin_latest_vision");
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (parsed?.analysis_id) return parsed as VisionAnalysis;
+    if (parsed?.analysis_id && parsed?.findings) return parsed as VisionAnalysis;
     return null;
   } catch {
     return null;
@@ -97,9 +101,9 @@ function saveCamp(payload: SavedCamp) {
 }
 
 function deriveWeaknessTags(v: VisionAnalysis | null): string[] {
-  if (!v || !Array.isArray(v.findings)) return [];
+  if (!v) return [];
 
-  const titles = v.findings.map((f) => String(f.title || "").toLowerCase());
+  const titles = v.findings.map((f) => f.title.toLowerCase());
   const tags: string[] = [];
 
   if (titles.some((x) => x.includes("telegraph") || x.includes("level change") || x.includes("entry"))) {
@@ -141,13 +145,13 @@ function inferProfilePriority(profile: any): {
 }
 
 function buildDirective(v: VisionAnalysis | null, focus: FocusKey): CampDirective {
-  if (!v || !Array.isArray(v.findings) || v.findings.length === 0) {
+  if (!v) {
     return {
       title: "Set a real directive (run Sensei Vision)",
       source: "No analysis loaded",
       bullets: [
-        "Run Sensei Vision on a real clip before making camp decisions.",
-        "Without Vision context, the camp becomes generic.",
+        "Run Sensei Vision on a clip before making camp decisions.",
+        "Without analysis, training becomes generic and wastes time.",
       ],
     };
   }
@@ -156,7 +160,7 @@ function buildDirective(v: VisionAnalysis | null, focus: FocusKey): CampDirectiv
 
   return {
     title: `Fix: ${top?.title || "Top issue"} (${focus} camp)`,
-    source: `Source: Sensei Vision · ${v.clipLabel || "Latest frame"}`,
+    source: `Source: Sensei Vision · ${v.clipLabel}`,
     bullets: [
       "Everything this week supports the directive.",
       "No random sessions. No ego rounds.",
@@ -169,6 +173,7 @@ function buildTraining(v: VisionAnalysis | null, focus: FocusKey, constraints: s
   const c = constraints.toLowerCase();
   const knee = c.includes("knee");
   const noPartner = c.includes("no partner");
+
   const weaknesses = deriveWeaknessTags(v);
 
   const primary: string[] = [];
@@ -177,18 +182,17 @@ function buildTraining(v: VisionAnalysis | null, focus: FocusKey, constraints: s
 
   if (weaknesses.includes("entry_timing")) primary.push("Entry timing: outside step → level change early (no pause).");
   if (weaknesses.includes("guard_exit")) primary.push("Exit discipline: guard stays high through reset + angle out.");
-  if (weaknesses.includes("base_integrity")) primary.push("Base integrity: do not let stance collapse during transitions.");
   if (!primary.length) primary.push("Pick 1 technical theme from Vision and train it for reps.");
 
   if (focus === "Pressure") secondary.push("Wall pace: re-attack rule (no disengage).");
-  if (focus === "Speed") secondary.push("Fast hands / entries: short bursts, sharp resets.");
-  if (focus === "Power") secondary.push("Explosive actions: low volume, perfect form, full reset.");
+  if (focus === "Speed") secondary.push("Fast hands: 6x2 min—touch, exit, reset.");
+  if (focus === "Power") secondary.push("Explosive actions: low volume, full reset, perfect form.");
   if (focus === "Recovery") secondary.push("Flow + mobility: leave fresher than you arrived.");
-  if (focus === "Mixed") secondary.push("Balanced rounds: one sharp technical theme, one conditioning theme.");
+  if (focus === "Mixed") secondary.push("Balanced rounds: 3x striking + 3x grappling focus blocks.");
 
   if (noPartner) avoid.push("Hard sparring as a substitute for real reps.");
-  if (knee) avoid.push("Hard pivots / reckless shots until warmed and stable.");
-  avoid.push("High-volume chaos sessions that do not target the directive.");
+  if (knee) avoid.push("Hard pivots / reckless shots until warmed + stable.");
+  avoid.push("High volume chaos sessions that don’t target the directive.");
 
   return { primary, secondary, avoid };
 }
@@ -197,6 +201,7 @@ function buildControl(v: VisionAnalysis | null, constraints: string): CampContro
   const c = constraints.toLowerCase();
   const fightWeek = c.includes("fight week") || c.includes("weigh-in");
   const injury = c.includes("knee") || c.includes("shoulder") || c.includes("back");
+
   const highFindings = (v?.findings ?? []).filter((f) => f.severity === "HIGH").length;
 
   let trainingLoad: CampControl["trainingLoad"] = "MODERATE";
@@ -205,17 +210,239 @@ function buildControl(v: VisionAnalysis | null, constraints: string): CampContro
   if (highFindings >= 2 && !fightWeek && !injury) trainingLoad = "HIGH";
 
   const warnings: string[] = [];
-  if (!v) warnings.push("No Vision loaded → you are guessing. Run Sensei Vision.");
-  if (fightWeek) warnings.push("Fight-week mode: reduce injury risk, keep sharpness, control fatigue.");
+  if (!v) warnings.push("No Vision loaded → you’re guessing. Run Sensei Vision.");
+  if (fightWeek) warnings.push("Fight-week mode: reduce GI risk, reduce injury risk, keep intensity controlled.");
   if (injury) warnings.push("Injury constraint present: cut intensity before form breaks.");
-  warnings.push("If the directive fails under fatigue, reduce chaos and increase clean reps.");
+  warnings.push("If the directive fails under fatigue, reduce rounds and increase technical reps.");
 
   const nextStep: string[] = [];
-  nextStep.push("Run a 20–40 minute technical block on the directive.");
+  nextStep.push("Run a 20–40 minute technical block on the directive (reps > wars).");
   nextStep.push("Use the gym tab only as support after the camp directive is set.");
-  nextStep.push("After the session, log another clip and re-run Vision.");
+  nextStep.push("After session: log 1 clip and re-run Vision (proof of improvement).");
 
   return { trainingLoad, warnings, nextStep };
+}
+
+function chooseSessionTiming(constraints: string): { label: string; durationMin: number } {
+  const c = constraints.toLowerCase();
+
+  if (c.includes("15 min")) return { label: "Morning session", durationMin: 15 };
+  if (c.includes("20 min")) return { label: "Short session", durationMin: 20 };
+  if (c.includes("30 min")) return { label: "Short session", durationMin: 30 };
+  if (c.includes("1 hour") || c.includes("60 min")) return { label: "Evening session", durationMin: 60 };
+  if (c.includes("evening")) return { label: "Evening session", durationMin: 45 };
+  if (c.includes("morning")) return { label: "Morning session", durationMin: 15 };
+
+  return { label: "Daily session", durationMin: 15 };
+}
+
+function buildDailySession(args: {
+  focus: FocusKey;
+  directive: CampDirective;
+  trainingFocus: TrainingFocus;
+  control: CampControl;
+  constraints: string;
+}): DailySession {
+  const c = args.constraints.toLowerCase();
+  const noPartner = c.includes("no partner");
+  const knee = c.includes("knee");
+  const directiveTitle = args.directive.title.toLowerCase();
+  const timing = chooseSessionTiming(args.constraints);
+
+  if (args.control.trainingLoad === "LOW" || args.focus === "Recovery") {
+    return {
+      title: `${timing.label} (${timing.durationMin} min)`,
+      durationMin: timing.durationMin,
+      timingLabel: timing.label,
+      goal: "Mobility + reset",
+      blocks:
+        timing.durationMin <= 20
+          ? [
+              "3 min hip openers",
+              "3 min ankle mobility",
+              "3 min thoracic rotation",
+              "3 min stance movement",
+              "3 min breathing reset",
+            ]
+          : [
+              "10 min hip + ankle mobility",
+              "10 min thoracic rotation + spine prep",
+              "10 min stance movement flow",
+              "10 min breathing + cooldown",
+            ],
+    };
+  }
+
+  if (directiveTitle.includes("entry") || args.focus === "Speed") {
+    return {
+      title: `${timing.label} (${timing.durationMin} min)`,
+      durationMin: timing.durationMin,
+      timingLabel: timing.label,
+      goal: "Entry speed + balance",
+      blocks:
+        timing.durationMin <= 20
+          ? [
+              "5 min stance movement",
+              "5 min entry drills",
+              "5 min shadow rounds with fast reset",
+            ]
+          : [
+              "10 min stance movement + footwork",
+              "10 min entry drills",
+              "10 min shadow rounds with reset discipline",
+              "10 min review pace rounds",
+            ],
+    };
+  }
+
+  if (args.focus === "Pressure") {
+    return {
+      title: `${timing.label} (${timing.durationMin} min)`,
+      durationMin: timing.durationMin,
+      timingLabel: timing.label,
+      goal: "Pressure rhythm",
+      blocks:
+        timing.durationMin <= 20
+          ? [
+              "5 min forward-step shadow pressure",
+              "5 min re-attack rhythm drills",
+              "5 min wall-pressure footwork or stance march",
+            ]
+          : [
+              "10 min pressure footwork",
+              "10 min re-attack rhythm drills",
+              "10 min wall / cage style movement",
+              "10 min short pressure shadow rounds",
+            ],
+    };
+  }
+
+  if (args.focus === "Power") {
+    return {
+      title: `${timing.label} (${timing.durationMin} min)`,
+      durationMin: timing.durationMin,
+      timingLabel: timing.label,
+      goal: "Explosive sharpness",
+      blocks:
+        timing.durationMin <= 20
+          ? [
+              "4 min dynamic warmup",
+              "5 min explosive shadow reps",
+              "3 min fast stance resets",
+              "3 min cooldown breathing",
+            ]
+          : [
+              "10 min dynamic warmup",
+              "15 min explosive shadow reps",
+              "10 min stance resets + entries",
+              "10 min cooldown + breathing",
+            ],
+    };
+  }
+
+  if (noPartner) {
+    return {
+      title: `${timing.label} (${timing.durationMin} min)`,
+      durationMin: timing.durationMin,
+      timingLabel: timing.label,
+      goal: "Solo technical reps",
+      blocks:
+        timing.durationMin <= 20
+          ? [
+              "5 min technical shadow",
+              "5 min focused correction reps",
+              "5 min free-flow shadow review",
+            ]
+          : [
+              "10 min technical shadow",
+              "10 min focused correction reps",
+              "10 min free-flow shadow review",
+              "10 min controlled pace rounds",
+            ],
+    };
+  }
+
+  if (knee) {
+    return {
+      title: `${timing.label} (${timing.durationMin} min)`,
+      durationMin: timing.durationMin,
+      timingLabel: timing.label,
+      goal: "Safe movement prep",
+      blocks:
+        timing.durationMin <= 20
+          ? [
+              "4 min gentle mobility",
+              "4 min stance control",
+              "4 min upper-body shadow mechanics",
+              "3 min cooldown",
+            ]
+          : [
+              "10 min gentle mobility",
+              "10 min stance control",
+              "10 min upper-body shadow mechanics",
+              "10 min cooldown",
+            ],
+    };
+  }
+
+  return {
+    title: `${timing.label} (${timing.durationMin} min)`,
+    durationMin: timing.durationMin,
+    timingLabel: timing.label,
+    goal: args.trainingFocus.primary[0] || "Technical sharpness",
+    blocks:
+      timing.durationMin <= 20
+        ? [
+            "5 min movement prep",
+            "5 min technical reps on the primary focus",
+            "5 min short shadow review",
+          ]
+        : [
+            "10 min movement prep",
+            "15 min technical reps on the primary focus",
+            "15 min shadow review + controlled rounds",
+            "10 min cooldown",
+          ],
+  };
+}
+
+function buildChecklist(args: {
+  dailySession: DailySession;
+  control: CampControl;
+}): ChecklistItem[] {
+  const items: ChecklistItem[] = [
+    {
+      id: "daily-session",
+      label: `${args.dailySession.title} — ${args.dailySession.goal}`,
+      done: false,
+    },
+    {
+      id: "technical-block",
+      label: "Technical drill block",
+      done: false,
+    },
+    {
+      id: "vision-retest",
+      label: "Vision re-test",
+      done: false,
+    },
+  ];
+
+  if (args.control.trainingLoad !== "LOW") {
+    items.push({
+      id: "conditioning",
+      label: "Conditioning block",
+      done: false,
+    });
+  }
+
+  items.push({
+    id: "mobility-recovery",
+    label: "Mobility / recovery",
+    done: false,
+  });
+
+  return items;
 }
 
 function buildSystemStatus(
@@ -226,8 +453,8 @@ function buildSystemStatus(
   return {
     visionConnected: !!vision,
     visionLabel: vision
-      ? `Last analysis: ${vision.clipLabel || vision.technique_detected || "Vision loaded"}`
-      : "No recent Vision analysis.",
+      ? `Last analysis: ${vision.clipLabel}`
+      : "No recent Vision analysis. Run Vision for a real directive.",
     fuelConnected: !!fuel,
     fuelLabel: fuel
       ? `Last Fuel report available${typeof fuel.score === "number" ? ` · Score ${Math.round(fuel.score)}` : ""}`
@@ -371,9 +598,6 @@ function scoreRealGyms(args: {
     if (!gym.is_verified) {
       watchOut.push("Unverified gym record.");
     }
-    if (!watchOut.length) {
-      watchOut.push("Confirm schedule and room fit before committing.");
-    }
 
     return {
       id: gym.id,
@@ -382,7 +606,7 @@ function scoreRealGyms(args: {
       compatibility: score,
       reason: reason.slice(0, 3),
       bestFor: bestFor.length ? bestFor.slice(0, 3) : ["General training support"],
-      watchOut: watchOut.slice(0, 3),
+      watchOut: watchOut.length ? watchOut.slice(0, 3) : ["Confirm schedule and room fit before committing."],
       href,
       verified: !!gym.is_verified,
     };
@@ -430,6 +654,8 @@ export default function SenseiClient() {
   const [trainingFocus, setTrainingFocus] = useState<TrainingFocus | null>(null);
   const [gyms, setGyms] = useState<GymCandidate[]>([]);
   const [control, setControl] = useState<CampControl | null>(null);
+  const [dailySession, setDailySession] = useState<DailySession | null>(null);
+  const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [systemStatus, setSystemStatus] = useState<SenseiSystemStatus>({
     visionConnected: false,
     visionLabel: "No recent Vision analysis.",
@@ -472,6 +698,8 @@ export default function SenseiClient() {
       setTrainingFocus(saved.trainingFocus);
       setGyms(saved.gyms);
       setControl(saved.control);
+      setDailySession(saved.dailySession);
+      setChecklist(saved.checklist ?? []);
       setStatusLabel("Ready");
       setBuildStage("DONE");
     }
@@ -516,13 +744,15 @@ export default function SenseiClient() {
       trainingFocus,
       gyms,
       control,
+      dailySession,
+      checklist,
       savedAt: Date.now(),
     };
 
     saveCamp(payload);
     savedCampRef.current = payload;
     setSystemStatus(buildSystemStatus(lastVisionRef.current, lastFuelRef.current, payload));
-  }, [focus, baseArt, styleTags, constraints, directive, trainingFocus, gyms, control]);
+  }, [focus, baseArt, styleTags, constraints, directive, trainingFocus, gyms, control, dailySession, checklist]);
 
   const statusTone =
     statusLabel === "Ready"
@@ -546,6 +776,8 @@ export default function SenseiClient() {
     setTrainingFocus(null);
     setGyms([]);
     setControl(null);
+    setDailySession(null);
+    setChecklist([]);
     setStatusLabel("Idle");
     setBuildStage("IDLE");
     setBusy(false);
@@ -598,6 +830,19 @@ export default function SenseiClient() {
       await delay(420);
       const c = buildControl(vision, constraints);
 
+      const session = buildDailySession({
+        focus,
+        directive: d,
+        trainingFocus: t,
+        control: c,
+        constraints,
+      });
+
+      const tasks = buildChecklist({
+        dailySession: session,
+        control: c,
+      });
+
       setBuildStage("RANKING_GYMS");
       await delay(420);
       const rankedGyms = scoreRealGyms({
@@ -613,6 +858,8 @@ export default function SenseiClient() {
       setTrainingFocus(t);
       setGyms(rankedGyms);
       setControl(c);
+      setDailySession(session);
+      setChecklist(tasks);
 
       setChatMessages((prev) => [
         ...prev,
@@ -622,7 +869,7 @@ export default function SenseiClient() {
           section: "all",
           text: vision
             ? `Camp built from Vision: "${vision.clipLabel}". Focus=${focus}. Weakness tags=${weaknessTags.join(", ") || "none"}.`
-            : "Camp built without Vision. Run Sensei Vision to stop guessing.",
+            : `Camp built WITHOUT Vision. Run Sensei Vision to stop guessing.`,
           ts: Date.now(),
         },
       ]);
@@ -648,6 +895,14 @@ export default function SenseiClient() {
     }
   }
 
+  function onToggleChecklistItem(id: string) {
+    setChecklist((prev) =>
+      prev.map((item) =>
+        item.id === id ? { ...item, done: !item.done } : item
+      )
+    );
+  }
+
   function onChatKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -663,13 +918,7 @@ export default function SenseiClient() {
 
     setChatMessages((prev) => [
       ...prev,
-      {
-        id: uid(),
-        role: "user",
-        section,
-        text,
-        ts: Date.now(),
-      },
+      { id: uid(), role: "user", section, text, ts: Date.now() },
     ]);
     setChatInput("");
     setChatSending(true);
@@ -691,13 +940,7 @@ export default function SenseiClient() {
 
       setChatMessages((prev) => [
         ...prev,
-        {
-          id: uid(),
-          role: "sensei",
-          section,
-          text: replyLines.join("\n"),
-          ts: Date.now(),
-        },
+        { id: uid(), role: "sensei", section, text: replyLines.join("\n"), ts: Date.now() },
       ]);
     } finally {
       setChatSending(false);
@@ -719,6 +962,9 @@ export default function SenseiClient() {
       gyms={gyms}
       control={control}
       systemStatus={systemStatus}
+      dailySession={dailySession}
+      checklist={checklist}
+      onToggleChecklistItem={onToggleChecklistItem}
       onBuildCamp={onBuildCamp}
       onReset={onReset}
       onOpenVision={onOpenVision}

@@ -1,521 +1,618 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useProfile } from "./ProfileProvider";
+import { useFighterContext } from "@/hooks/useFighterContext";
 
-type Focus = "Pressure" | "Speed" | "Power" | "Recovery" | "Mixed";
+type WeightStatus =
+  | "On Track"
+  | "Slightly Behind"
+  | "Off Track"
+  | "No Fight Scheduled";
+
+type VisionFinding = {
+  id?: string;
+  title: string;
+  detail: string;
+  severity: "LOW" | "MEDIUM" | "HIGH";
+};
+
+type VisionAnalysis = {
+  analysis_id?: string;
+  clipLabel?: string;
+  findings?: VisionFinding[];
+};
+
+type CampDirective = {
+  title: string;
+  source: string;
+  bullets: string[];
+};
+
+type TrainingFocus = {
+  primary: string[];
+  secondary: string[];
+  avoid: string[];
+};
+
+type CampControl = {
+  trainingLoad: "LOW" | "MODERATE" | "HIGH";
+  warnings: string[];
+  nextStep: string[];
+};
+
+type DailySession = {
+  title: string;
+  durationMin: number;
+  timingLabel: string;
+  goal: string;
+  blocks: string[];
+};
+
+type SavedCamp = {
+  focus: string;
+  baseArt: string;
+  styleTags: string;
+  constraints: string;
+  directive: CampDirective | null;
+  trainingFocus: TrainingFocus | null;
+  control: CampControl | null;
+  dailySession: DailySession | null;
+  savedAt: number;
+};
+
+type FuelMemory = {
+  score?: number;
+  report?: string;
+};
+
+type WeightLog = {
+  value: number;
+  loggedAt: string;
+};
 
 function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
-function formatDaysAgo(days: number) {
-  if (days <= 0) return "Today";
-  if (days === 1) return "1d ago";
-  return `${days}d ago`;
+function Badge({
+  children,
+  tone = "neutral",
+}: {
+  children: React.ReactNode;
+  tone?: "neutral" | "good" | "warn" | "bad";
+}) {
+  const cls =
+    tone === "good"
+      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+      : tone === "warn"
+      ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+      : tone === "bad"
+      ? "border-rose-500/30 bg-rose-500/10 text-rose-200"
+      : "border-slate-700/60 bg-slate-900/30 text-slate-200/90";
+
+  return (
+    <span className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-xs", cls)}>
+      {children}
+    </span>
+  );
 }
 
-function clamp(n: number, a: number, b: number) {
-  return Math.max(a, Math.min(b, n));
+function Card({
+  title,
+  sub,
+  right,
+  children,
+}: {
+  title: string;
+  sub?: string;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-3xl border border-slate-800/60 bg-slate-950/25 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] backdrop-blur">
+      <div className="flex items-start justify-between gap-3 border-b border-slate-800/40 px-5 py-4">
+        <div>
+          <div className="text-sm font-semibold text-slate-50">{title}</div>
+          {sub ? <div className="mt-1 text-xs text-slate-300/70">{sub}</div> : null}
+        </div>
+        {right}
+      </div>
+      <div className="px-5 py-5">{children}</div>
+    </section>
+  );
+}
+
+function Bullets({ items }: { items: string[] }) {
+  return (
+    <ul className="space-y-2 text-sm text-slate-100/90">
+      {items.map((item, i) => (
+        <li key={i} className="flex gap-2">
+          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-300/80" />
+          <span>{item}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function readJson<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function daysUntil(dateStr?: string | null): number | null {
+  if (!dateStr) return null;
+  const now = new Date();
+  const target = new Date(dateStr);
+  if (Number.isNaN(target.getTime())) return null;
+
+  const ms = target.getTime() - now.getTime();
+  return Math.max(0, Math.ceil(ms / (1000 * 60 * 60 * 24)));
+}
+
+function getLatestWeight(logs: WeightLog[], fallback?: number | null): number | null {
+  if (logs.length > 0) return logs[logs.length - 1].value;
+  if (typeof fallback === "number" && Number.isFinite(fallback)) return fallback;
+  return null;
+}
+
+function buildWeightStatus(args: {
+  currentWeight: number | null;
+  targetWeight: number | null;
+  daysRemaining: number | null;
+}): WeightStatus {
+  const { currentWeight, targetWeight, daysRemaining } = args;
+
+  if (daysRemaining === null) return "No Fight Scheduled";
+  if (currentWeight === null || targetWeight === null) return "No Fight Scheduled";
+
+  const diff = currentWeight - targetWeight;
+
+  if (diff <= 0.5) return "On Track";
+
+  const requiredPerDay = diff / Math.max(daysRemaining, 1);
+
+  if (requiredPerDay <= 0.35) return "On Track";
+  if (requiredPerDay <= 0.6) return "Slightly Behind";
+  return "Off Track";
+}
+
+function statusTone(status: WeightStatus): "good" | "warn" | "bad" | "neutral" {
+  if (status === "On Track") return "good";
+  if (status === "Slightly Behind") return "warn";
+  if (status === "Off Track") return "bad";
+  return "neutral";
+}
+
+function getMissionBlocks(camp: SavedCamp | null) {
+  const primary = camp?.trainingFocus?.primary ?? [];
+  const secondary = camp?.trainingFocus?.secondary ?? [];
+  const control = camp?.control;
+  const session = camp?.dailySession;
+
+  return {
+    striking: primary[0] ?? "No striking mission set",
+    grappling: primary[1] ?? secondary[0] ?? "No grappling mission set",
+    conditioning:
+      control?.trainingLoad === "LOW"
+        ? "Low-output conditioning or active recovery"
+        : control?.trainingLoad === "HIGH"
+        ? "Hard conditioning focus"
+        : "Moderate conditioning focus",
+    recovery:
+      session?.goal?.toLowerCase().includes("mobility") || control?.trainingLoad === "LOW"
+        ? "Mobility + walk + breathing reset"
+        : "Recovery after main training block",
+  };
 }
 
 export default function DashboardClient() {
-  const { profile } = useProfile();
+  const { fighterContext } = useFighterContext();
 
-  const name = profile?.name || "Fighter";
-  const base = profile?.baseArt || "MMA";
-  const level = profile?.competitionLevel || "Amateur";
+  const [camp, setCamp] = useState<SavedCamp | null>(null);
+  const [vision, setVision] = useState<VisionAnalysis | null>(null);
+  const [fuel, setFuel] = useState<FuelMemory | null>(null);
+  const [weightLogs, setWeightLogs] = useState<WeightLog[]>([]);
+  const [weightInput, setWeightInput] = useState("");
 
-  const [focus, setFocus] = useState<Focus>("Speed");
+  useEffect(() => {
+    const campData = readJson<SavedCamp>("disciplin_latest_camp");
+    const visionData = readJson<VisionAnalysis>("disciplin_latest_vision");
+    const fuelData = readJson<FuelMemory>("disciplin_latest_fuel");
+    const logsData = readJson<WeightLog[]>("disciplin_weight_logs") ?? [];
 
-  // TODO: Replace these with real DB values once logs exist.
-  const mock = useMemo(() => {
-    const lastSenseiDaysAgo = 30;
-    const lastFuelDaysAgo = 30;
-    const sessionsThisWeek = 0;
-    const streakDays = 0;
-
-    // Technical tracker (SenseiVision)
-    const vision = {
-      lastGrade: 0, // 0 when no data
-      bestGrade: 0,
-      lastErrorCode: "—",
-      delta: null as number | null,
-      lastVisionDaysAgo: 0,
-    };
-
-    // A preview of last entries (once you have logs)
-    const recentLog: Array<{ title: string; meta: string; href: string }> = [
-      { title: "No sessions logged yet", meta: "Start one today", href: "/sensei" },
-      { title: "No SenseiVision analyses yet", meta: "Analyze a frame", href: "/sensei-vision" },
-    ];
-
-    return {
-      lastSenseiDaysAgo,
-      lastFuelDaysAgo,
-      sessionsThisWeek,
-      streakDays,
-      vision,
-      recentLog,
-    };
+    setCamp(campData);
+    setVision(visionData);
+    setFuel(fuelData);
+    setWeightLogs(logsData);
   }, []);
 
-  const focusCards: Array<{ id: Focus; desc: string; sub: string }> = useMemo(
-    () => [
-      { id: "Pressure", desc: "pace + re-attacks", sub: "Wrestling pressure, cage work, cardio warfare." },
-      { id: "Speed", desc: "entries + resets", sub: "Sharp striking, crisp reactions, fast hands." },
-      { id: "Power", desc: "quality singles", sub: "Explosive shots, low volume, perfect form." },
-      { id: "Recovery", desc: "repair + skill", sub: "Low impact, tissue quality, safe output." },
-      { id: "Mixed", desc: "balanced output", sub: "Striking + grappling priorities, no drift." },
-    ],
-    []
-  );
+  const fightDate = fighterContext.camp.fightDate;
+  const weightClass = fighterContext.identity.weightClass ?? "Not set";
+  const profileCurrentWeight = fighterContext.identity.currentWeight;
+  const targetWeight = fighterContext.identity.targetWeight;
 
-  const todayPlan = useMemo(() => {
-    switch (focus) {
-      case "Pressure":
-        return {
-          headline: "Pressure session. No pauses.",
-          nextAction: "Open Sensei → generate Pressure session",
-          blocks: [
-            { title: "Warmup", bullets: ["8–10 min easy + mobility", "Handfight shadow: forehead pressure + elbows in (3 min)"] },
-            { title: "Rounds", bullets: ["5×3 min: chain entry → re-attack (no reset)", "1 rule: if you miss, you re-shoot immediately"] },
-            { title: "Finisher", bullets: ["8–10 min tempo intervals", "Nasal breathing until last 90s"] },
-            { title: "Safety", bullets: ["If form collapses, cut volume by 20% and keep quality"] },
-          ],
-        };
-      case "Speed":
-        return {
-          headline: "Speed session. Crisp reps only.",
-          nextAction: "Open Sensei → generate Speed session",
-          blocks: [
-            { title: "Warmup", bullets: ["Footwork + snap shots (8 min)", "2×2 min: jab-only with resets"] },
-            { title: "Rounds", bullets: ["6×2 min: fast hands, hard reset discipline", "Between rounds: 30s light bounce"] },
-            { title: "Finisher", bullets: ["6–10 short hill sprints", "Full walk-back recovery"] },
-            { title: "Safety", bullets: ["Stop if mechanics degrade; speed without form = waste"] },
-          ],
-        };
-      case "Power":
-        return {
-          headline: "Power session. Stop before form breaks.",
-          nextAction: "Open Sensei → generate Power session",
-          blocks: [
-            { title: "Warmup", bullets: ["Nervous system primes (8–10 min)", "3×3 clean explosive reps (easy)"] },
-            { title: "Main", bullets: ["Singles: 8–12 total perfect reps", "Full reset between reps (60–90s)"] },
-            { title: "Finisher", bullets: ["6 min explosive circuit (short bursts)", "End early if speed drops"] },
-            { title: "Safety", bullets: ["No grinding reps; quality only"] },
-          ],
-        };
-      case "Recovery":
-        return {
-          headline: "Recovery session. Leave fresher than you came.",
-          nextAction: "Open Sensei → generate Recovery session",
-          blocks: [
-            { title: "Warmup", bullets: ["Breathing + joint prep (8 min)", "Long exhale work (2–3 min)"] },
-            { title: "Technique", bullets: ["Flow drilling 30–45 min", "Zero fatigue reps; perfect positions"] },
-            { title: "Finish", bullets: ["Long walk + mobility (20–30 min)", "Soft tissue (5–8 min)"] },
-            { title: "Safety", bullets: ["No impact. No pivots. No ego."] },
-          ],
-        };
-      case "Mixed":
-      default:
-        return {
-          headline: "Mixed session. Balanced output, no drift.",
-          nextAction: "Open Sensei → generate Mixed session",
-          blocks: [
-            { title: "Warmup", bullets: ["Mixed movement (8–10 min)", "Shadow: 2 min strike → 2 min shot entries"] },
-            { title: "Rounds", bullets: ["3×3 striking + 3×3 grappling", "1 rule: keep tempo steady"] },
-            { title: "Finisher", bullets: ["8 min light intervals", "Cooldown breathing 3 min"] },
-            { title: "Safety", bullets: ["Keep intensity moderate; win consistency"] },
-          ],
-        };
+  const currentWeight = getLatestWeight(weightLogs, profileCurrentWeight);
+  const daysRemaining = daysUntil(fightDate);
+  const weightStatus = buildWeightStatus({
+    currentWeight,
+    targetWeight,
+    daysRemaining,
+  });
+
+  const mission = useMemo(() => getMissionBlocks(camp), [camp]);
+
+  const corrections = useMemo(() => {
+    const findings = Array.isArray(vision?.findings) ? vision.findings : [];
+    return findings.slice(0, 3);
+  }, [vision]);
+
+  const coachNotes = useMemo(() => {
+    const notes: string[] = [];
+
+    if (camp?.directive?.bullets?.length) {
+      notes.push(...camp.directive.bullets.slice(0, 2));
     }
-  }, [focus]);
+    if (camp?.control?.warnings?.length) {
+      notes.push(...camp.control.warnings.slice(0, 1));
+    }
+    if (camp?.control?.nextStep?.length) {
+      notes.push(...camp.control.nextStep.slice(0, 1));
+    }
 
-  const momentumTone =
-    mock.sessionsThisWeek >= 4 ? "good" : mock.sessionsThisWeek >= 2 ? "warn" : "bad";
+    return notes.slice(0, 4);
+  }, [camp]);
 
-  const visionTone =
-    mock.vision.lastGrade >= 75 ? "good" : mock.vision.lastGrade >= 50 ? "warn" : mock.vision.lastGrade > 0 ? "bad" : "neutral";
+  const weightDifference =
+    currentWeight !== null && typeof targetWeight === "number"
+      ? Number((currentWeight - targetWeight).toFixed(1))
+      : null;
 
-  const visionDeltaText =
-    mock.vision.delta == null ? "—" : mock.vision.delta >= 0 ? `+${mock.vision.delta}` : `${mock.vision.delta}`;
+  const progressPct =
+    currentWeight !== null && typeof targetWeight === "number"
+      ? Math.max(0, Math.min(100, 100 - Math.max(0, currentWeight - targetWeight) * 8))
+      : 0;
+
+  function handleLogWeight() {
+    const value = Number(weightInput);
+    if (!Number.isFinite(value) || value <= 0) return;
+
+    const next: WeightLog[] = [
+      ...weightLogs,
+      {
+        value,
+        loggedAt: new Date().toISOString(),
+      },
+    ];
+
+    setWeightLogs(next);
+    localStorage.setItem("disciplin_weight_logs", JSON.stringify(next));
+    setWeightInput("");
+  }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-50 px-6 py-10">
-      <div className="max-w-6xl mx-auto space-y-6">
-        {/* Top bar */}
-        <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold tracking-[0.25em] text-emerald-400">DISCIPLIN</p>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-300">
-              <span className="truncate">
-                {name} · {base} · {level}
-              </span>
-              <span className="text-slate-500">•</span>
-              <span>
-                Focus <span className="text-emerald-200 font-semibold">{focus}</span>
-              </span>
-              <span className="text-slate-500">•</span>
-              <span>Sensei {formatDaysAgo(mock.lastSenseiDaysAgo)}</span>
-              <span className="text-slate-500">•</span>
-              <span>Fuel {formatDaysAgo(mock.lastFuelDaysAgo)}</span>
-            </div>
+    <main className="min-h-[calc(100vh-72px)] pt-24 pb-10">
+      <div className="mx-auto max-w-7xl px-4 md:px-6">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Badge tone="good">FIGHT CAMP COMMAND CENTER</Badge>
+            <span className="text-sm text-slate-200/80">
+              Daily operating screen for training, weight, correction, and action.
+            </span>
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <Badge tone={statusTone(weightStatus)}>{weightStatus}</Badge>
             <Link
-              className="rounded-full border border-slate-700 bg-slate-950/40 px-4 py-2 text-sm hover:border-emerald-400/50"
               href="/sensei"
+              className="rounded-full border border-slate-700/70 bg-slate-950/30 px-3 py-1.5 text-xs text-slate-200/80 hover:bg-slate-900/40"
             >
               Open Sensei →
             </Link>
-            <Link
-              className="rounded-full border border-slate-700 bg-slate-950/40 px-4 py-2 text-sm hover:border-emerald-400/50"
-              href="/sensei-vision"
-            >
-              SenseiVision →
-            </Link>
-            <Link
-              className="rounded-full border border-slate-700 bg-slate-950/40 px-4 py-2 text-sm hover:border-emerald-400/50"
-              href="/profile"
-            >
-              Profile →
-            </Link>
           </div>
         </div>
 
-        {/* Momentum row */}
-        <div className="grid gap-4 md:grid-cols-4">
-          <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-5">
-            <p className="text-[11px] tracking-[0.25em] text-slate-400">SESSIONS THIS WEEK</p>
-            <p className="mt-2 text-3xl font-semibold">{mock.sessionsThisWeek}</p>
-            <p className="mt-1 text-xs text-slate-400">Target: 3–5.</p>
-          </div>
-
-          <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-5">
-            <p className="text-[11px] tracking-[0.25em] text-slate-400">STREAK</p>
-            <p className="mt-2 text-3xl font-semibold">{mock.streakDays}</p>
-            <p className="mt-1 text-xs text-slate-400">Days in a row.</p>
-          </div>
-
-          <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-5">
-            <p className="text-[11px] tracking-[0.25em] text-slate-400">MOMENTUM</p>
-            <p
-              className={cn(
-                "mt-2 inline-flex items-center rounded-full border px-3 py-1 text-sm font-semibold",
-                momentumTone === "good"
-                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-                  : momentumTone === "warn"
-                  ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
-                  : "border-rose-500/30 bg-rose-500/10 text-rose-200"
-              )}
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+          <div className="space-y-6 xl:col-span-8">
+            <Card
+              title="Camp status"
+              sub="What matters immediately."
+              right={<Badge tone={statusTone(weightStatus)}>{weightStatus}</Badge>}
             >
-              {momentumTone === "good" ? "ON TRACK" : momentumTone === "warn" ? "BEHIND" : "OFF TRACK"}
-            </p>
-            <p className="mt-2 text-xs text-slate-400">
-              If it’s off track, your “plan” doesn’t matter.
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-5">
-            <p className="text-[11px] tracking-[0.25em] text-slate-400">TECHNICAL GRADE</p>
-            <p className="mt-2 text-3xl font-semibold">{mock.vision.lastGrade ? `${mock.vision.lastGrade}%` : "—"}</p>
-            <p className="mt-1 text-xs text-slate-400">
-              SenseiVision {mock.vision.lastVisionDaysAgo ? formatDaysAgo(mock.vision.lastVisionDaysAgo) : "—"}
-            </p>
-          </div>
-        </div>
-
-        {/* Main grid */}
-        <div className="grid gap-6 lg:grid-cols-12">
-          {/* LEFT: Focus + Quick Launch */}
-          <div className="lg:col-span-5 space-y-6">
-            {/* Focus selector */}
-            <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs font-semibold tracking-[0.25em] text-slate-300">FOCUS</p>
-                  <h2 className="mt-2 text-xl font-semibold">Choose one focus.</h2>
-                  <p className="mt-1 text-sm text-slate-400">Everything else becomes secondary.</p>
+              <div className="grid gap-4 md:grid-cols-4">
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Fight date</div>
+                  <div className="mt-2 text-sm font-semibold text-slate-50">
+                    {fightDate ?? "No fight scheduled"}
+                  </div>
                 </div>
-                <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">
-                  {focus}
-                </span>
+
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Days remaining</div>
+                  <div className="mt-2 text-sm font-semibold text-slate-50">
+                    {daysRemaining !== null ? `${daysRemaining} days` : "—"}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Weight class</div>
+                  <div className="mt-2 text-sm font-semibold text-slate-50">{weightClass}</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Current weight</div>
+                  <div className="mt-2 text-sm font-semibold text-slate-50">
+                    {currentWeight !== null ? `${currentWeight} kg` : "Not logged"}
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            <Card
+              title="Today’s mission"
+              sub="Here is your mission for today."
+              right={
+                camp?.dailySession ? (
+                  <Badge tone="good">{camp.dailySession.durationMin} min</Badge>
+                ) : (
+                  <Badge tone="warn">Build camp</Badge>
+                )
+              }
+            >
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-emerald-200/80">Striking</div>
+                  <div className="mt-2 text-sm text-slate-100">{mission.striking}</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Grappling</div>
+                  <div className="mt-2 text-sm text-slate-100">{mission.grappling}</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Conditioning</div>
+                  <div className="mt-2 text-sm text-slate-100">{mission.conditioning}</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Recovery</div>
+                  <div className="mt-2 text-sm text-slate-100">{mission.recovery}</div>
+                </div>
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                {focusCards.map((c) => {
-                  const on = c.id === focus;
-                  return (
-                    <button
-                      key={c.id}
-                      onClick={() => setFocus(c.id)}
-                      className={cn(
-                        "rounded-2xl border p-4 text-left transition",
-                        on
-                          ? "border-emerald-400/50 bg-emerald-500/10"
-                          : "border-slate-800 bg-slate-950/40 hover:border-emerald-400/30"
-                      )}
+              {camp?.dailySession ? (
+                <div className="mt-4 rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">
+                        Today’s session
+                      </div>
+                      <div className="mt-2 text-sm font-semibold text-slate-50">
+                        {camp.dailySession.title}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-300/70">
+                        {camp.dailySession.timingLabel} · Goal: {camp.dailySession.goal}
+                      </div>
+                    </div>
+                    <Badge tone="good">{camp.dailySession.durationMin} min</Badge>
+                  </div>
+
+                  <div className="mt-3">
+                    <Bullets items={camp.dailySession.blocks} />
+                  </div>
+                </div>
+              ) : null}
+            </Card>
+
+            <Card
+              title="Yesterday’s corrections"
+              sub="Strict reminders from recent analysis."
+              right={
+                vision?.clipLabel ? (
+                  <Badge tone="good">{vision.clipLabel}</Badge>
+                ) : (
+                  <Badge tone="warn">No recent clip</Badge>
+                )
+              }
+            >
+              {corrections.length ? (
+                <div className="space-y-3">
+                  {corrections.map((item, i) => (
+                    <div
+                      key={item.id ?? i}
+                      className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4"
                     >
-                      <p className={cn("text-sm font-semibold", on && "text-emerald-200")}>{c.id}</p>
-                      <p className="mt-1 text-xs text-slate-400">{c.desc}</p>
-                      <p className="mt-2 text-xs text-slate-500">{c.sub}</p>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-50">{item.title}</div>
+                          <div className="mt-2 text-sm text-slate-300/80">{item.detail}</div>
+                        </div>
+                        <Badge
+                          tone={
+                            item.severity === "HIGH"
+                              ? "bad"
+                              : item.severity === "MEDIUM"
+                              ? "warn"
+                              : "good"
+                          }
+                        >
+                          {item.severity}
+                        </Badge>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
+                  No recent corrections. Upload a clip in Sensei Vision to generate strict correction reminders.
+                </div>
+              )}
+            </Card>
+          </div>
+
+          <div className="space-y-6 xl:col-span-4">
+            <Card
+              title="Weight tracking"
+              sub="Trajectory toward fight weight."
+              right={<Badge tone={statusTone(weightStatus)}>{weightStatus}</Badge>}
+            >
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Current weight</div>
+                    <div className="mt-2 text-sm font-semibold text-slate-50">
+                      {currentWeight !== null ? `${currentWeight} kg` : "Not logged"}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Target weight</div>
+                    <div className="mt-2 text-sm font-semibold text-slate-50">
+                      {typeof targetWeight === "number" ? `${targetWeight} kg` : "Not set"}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Difference</div>
+                    <div className="mt-2 text-sm font-semibold text-slate-50">
+                      {weightDifference !== null ? `${weightDifference.toFixed(1)} kg` : "—"}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Days remaining</div>
+                    <div className="mt-2 text-sm font-semibold text-slate-50">
+                      {daysRemaining !== null ? `${daysRemaining}` : "—"}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Trajectory</div>
+                  <div className="h-2 w-full overflow-hidden rounded-full border border-slate-800/60 bg-slate-950/60">
+                    <div
+                      className={cn(
+                        "h-full rounded-full transition-all",
+                        weightStatus === "On Track"
+                          ? "bg-emerald-400/80"
+                          : weightStatus === "Slightly Behind"
+                          ? "bg-amber-400/80"
+                          : weightStatus === "Off Track"
+                          ? "bg-rose-400/80"
+                          : "bg-slate-700"
+                      )}
+                      style={{ width: `${progressPct}%` }}
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Log weight</div>
+                  <div className="mt-3 flex gap-2">
+                    <input
+                      value={weightInput}
+                      onChange={(e) => setWeightInput(e.target.value)}
+                      placeholder="e.g. 68.2"
+                      className="w-full rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
+                    />
+                    <button
+                      onClick={handleLogWeight}
+                      className="rounded-2xl bg-emerald-400/95 px-4 py-3 text-sm font-medium text-slate-950 hover:bg-emerald-300"
+                    >
+                      Log
                     </button>
-                  );
-                })}
+                  </div>
+                </div>
               </div>
+            </Card>
 
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <Link className="rounded-full border border-slate-700 bg-slate-950/40 px-4 py-2 text-xs hover:border-emerald-400/50" href="/sensei">
-                  Generate in Sensei →
-                </Link>
-                <Link className="rounded-full border border-slate-700 bg-slate-950/40 px-4 py-2 text-xs hover:border-emerald-400/50" href="/sensei-vision">
-                  Analyze in Vision →
-                </Link>
-                <Link className="rounded-full border border-slate-700 bg-slate-950/40 px-4 py-2 text-xs hover:border-emerald-400/50" href="/fuel">
-                  Open Fuel →
-                </Link>
-              </div>
-            </div>
+            <Card
+              title="Coach / Sensei notes"
+              sub="Short notes for today."
+              right={<Badge tone="neutral">Daily notes</Badge>}
+            >
+              {coachNotes.length ? (
+                <Bullets items={coachNotes} />
+              ) : (
+                <div className="text-sm text-slate-300/70">
+                  No coach notes yet. Build a camp in Sensei first.
+                </div>
+              )}
+            </Card>
 
-            {/* Quick Launch */}
-            <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
-              <p className="text-xs font-semibold tracking-[0.25em] text-slate-300">QUICK LAUNCH</p>
-              <p className="mt-2 text-sm text-slate-400">Dashboard is a command center, not a homepage.</p>
+            <Card
+              title="Quick actions"
+              sub="Use the most important tools fast."
+              right={<Badge tone="good">Actions</Badge>}
+            >
+              <div className="grid gap-3">
+                <Link
+                  href="/sensei-vision"
+                  className="rounded-2xl border border-slate-800/60 bg-slate-950/25 px-4 py-3 text-sm text-slate-100 hover:bg-slate-900/35"
+                >
+                  Upload Sparring Clip
+                </Link>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <Link
+                  href="/report"
+                  className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-100 hover:bg-emerald-500/10"
+                >
+                  View Fighter Report Card
+                </Link>
+
+                <button
+                  onClick={() => {
+                    const el = document.querySelector<HTMLInputElement>(
+                      'input[placeholder="e.g. 68.2"]'
+                    );
+                    el?.focus();
+                  }}
+                  className="rounded-2xl border border-slate-800/60 bg-slate-950/25 px-4 py-3 text-left text-sm text-slate-100 hover:bg-slate-900/35"
+                >
+                  Log Weight
+                </button>
+
                 <Link
                   href="/sensei"
-                  className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 hover:border-emerald-400/30 transition"
+                  className="rounded-2xl border border-slate-800/60 bg-slate-950/25 px-4 py-3 text-sm text-slate-100 hover:bg-slate-900/35"
                 >
-                  <div className="text-sm font-semibold">Sensei</div>
-                  <div className="mt-1 text-xs text-slate-400">Generate session blocks</div>
+                  Start Today’s Session
                 </Link>
 
                 <Link
-                  href="/sensei-vision"
-                  className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 hover:border-emerald-400/30 transition"
+                  href="/sensei"
+                  className="rounded-2xl border border-slate-800/60 bg-slate-950/25 px-4 py-3 text-sm text-slate-100 hover:bg-slate-900/35"
                 >
-                  <div className="text-sm font-semibold">SenseiVision</div>
-                  <div className="mt-1 text-xs text-slate-400">Freeze. Grade. Fix.</div>
+                  Ask Sensei
                 </Link>
 
                 <Link
-                  href="/fuel"
-                  className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 hover:border-emerald-400/30 transition"
+                  href="/sensei"
+                  className="rounded-2xl border border-slate-800/60 bg-slate-950/25 px-4 py-3 text-sm text-slate-100 hover:bg-slate-900/35"
                 >
-                  <div className="text-sm font-semibold">Fuel</div>
-                  <div className="mt-1 text-xs text-slate-400">Nutrition + recovery checks</div>
-                </Link>
-
-                <Link
-                  href="/gyms"
-                  className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 hover:border-emerald-400/30 transition"
-                >
-                  <div className="text-sm font-semibold">Gyms</div>
-                  <div className="mt-1 text-xs text-slate-400">Find training partners</div>
-                </Link>
-
-                <Link
-                  href="/profile"
-                  className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 hover:border-emerald-400/30 transition"
-                >
-                  <div className="text-sm font-semibold">Profile</div>
-                  <div className="mt-1 text-xs text-slate-400">Base art, level, goals</div>
-                </Link>
-
-                <Link
-                  href="/membership"
-                  className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 hover:border-emerald-400/30 transition"
-                >
-                  <div className="text-sm font-semibold">Membership</div>
-                  <div className="mt-1 text-xs text-slate-400">Manage access</div>
+                  View Camp Plan
                 </Link>
               </div>
-            </div>
-          </div>
 
-          {/* RIGHT: Today Command + Technical + Log */}
-          <div className="lg:col-span-7 space-y-6">
-            {/* Today Command */}
-            <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-7">
-              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold tracking-[0.25em] text-emerald-300">TODAY</p>
-                  <h2 className="mt-2 text-2xl font-semibold">{todayPlan.headline}</h2>
-                  <p className="mt-1 text-sm text-slate-400">
-                    {base} focus: <span className="text-emerald-200 font-semibold">{focus}</span>
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <Link
-                    href="/sensei"
-                    className="rounded-full bg-emerald-400/95 px-5 py-2.5 text-sm font-semibold text-slate-950 hover:bg-emerald-300 transition"
-                  >
-                    Start in Sensei →
-                  </Link>
-                  <Link
-                    href="/sensei-vision"
-                    className="rounded-full border border-slate-700 bg-slate-950/40 px-5 py-2.5 text-sm hover:border-emerald-400/50 transition"
-                  >
-                    Analyze frame →
-                  </Link>
-                </div>
-              </div>
-
-              <div className="mt-6 grid gap-3 md:grid-cols-2">
-                {todayPlan.blocks.map((b) => (
-                  <div key={b.title} className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                    <div className="text-sm font-semibold">{b.title}</div>
-                    <ul className="mt-2 space-y-2 text-sm text-slate-200">
-                      {b.bullets.map((x, i) => (
-                        <li key={i} className="flex gap-2">
-                          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-300/80" />
-                          <span>{x}</span>
-                        </li>
-                      ))}
-                    </ul>
+              {fuel?.score !== undefined ? (
+                <div className="mt-4 rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Fuel status</div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <div className="text-sm text-slate-100">Latest Fuel AI score</div>
+                    <Badge tone={fuel.score >= 75 ? "good" : fuel.score >= 50 ? "warn" : "bad"}>
+                      {Math.round(fuel.score)}
+                    </Badge>
                   </div>
-                ))}
-              </div>
-
-              <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                <div className="text-xs font-semibold tracking-[0.25em] text-slate-400">NEXT ACTION</div>
-                <div className="mt-2 text-sm text-slate-200">{todayPlan.nextAction}</div>
-              </div>
-            </div>
-
-            {/* Technical tracker */}
-            <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs font-semibold tracking-[0.25em] text-slate-300">TECHNICAL TRACKER</p>
-                  <h3 className="mt-2 text-lg font-semibold">SenseiVision progress</h3>
-                  <p className="mt-1 text-sm text-slate-400">
-                    This is what makes it feel like a real training system.
-                  </p>
                 </div>
-
-                <span
-                  className={cn(
-                    "rounded-full border px-3 py-1 text-xs",
-                    visionTone === "good"
-                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-                      : visionTone === "warn"
-                      ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
-                      : visionTone === "bad"
-                      ? "border-rose-500/30 bg-rose-500/10 text-rose-200"
-                      : "border-slate-700 bg-slate-950/40 text-slate-300"
-                  )}
-                >
-                  {mock.vision.lastGrade ? `${mock.vision.lastGrade}%` : "No data"}
-                </span>
-              </div>
-
-              <div className="mt-5 grid gap-4 sm:grid-cols-3">
-                <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                  <div className="text-[11px] tracking-[0.25em] text-slate-400">LAST</div>
-                  <div className="mt-2 text-2xl font-semibold">{mock.vision.lastGrade ? `${mock.vision.lastGrade}%` : "—"}</div>
-                  <div className="mt-1 text-xs text-slate-400">Δ {visionDeltaText}</div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                  <div className="text-[11px] tracking-[0.25em] text-slate-400">BEST</div>
-                  <div className="mt-2 text-2xl font-semibold">{mock.vision.bestGrade ? `${mock.vision.bestGrade}%` : "—"}</div>
-                  <div className="mt-1 text-xs text-slate-400">Peak execution</div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                  <div className="text-[11px] tracking-[0.25em] text-slate-400">ERROR CODE</div>
-                  <div className="mt-2 text-sm font-semibold text-slate-200">{mock.vision.lastErrorCode}</div>
-                  <div className="mt-1 text-xs text-slate-400">Most recent issue</div>
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Link
-                  href="/sensei-vision"
-                  className="rounded-full bg-emerald-400/95 px-5 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-300 transition"
-                >
-                  Analyze now →
-                </Link>
-                <Link
-                  href="/sensei-vision"
-                  className="rounded-full border border-slate-700 bg-slate-950/40 px-5 py-2 text-sm hover:border-emerald-400/50 transition"
-                >
-                  View history →
-                </Link>
-              </div>
-            </div>
-
-            {/* Log preview */}
-            <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs font-semibold tracking-[0.25em] text-slate-300">RECENT</p>
-                  <h3 className="mt-2 text-lg font-semibold">Training trail</h3>
-                  <p className="mt-1 text-sm text-slate-400">This is where “serious” lives: traceable work.</p>
-                </div>
-                <Link
-                  href="/profile"
-                  className="rounded-full border border-slate-700 bg-slate-950/40 px-4 py-2 text-xs hover:border-emerald-400/50 transition"
-                >
-                  Manage →
-                </Link>
-              </div>
-
-              <div className="mt-5 space-y-3">
-                {mock.recentLog.map((x, i) => (
-                  <Link
-                    key={`${x.title}-${i}`}
-                    href={x.href}
-                    className="block rounded-2xl border border-slate-800 bg-slate-950/40 p-4 hover:border-emerald-400/30 transition"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-slate-100 truncate">{x.title}</div>
-                        <div className="mt-1 text-xs text-slate-400">{x.meta}</div>
-                      </div>
-                      <div className="text-xs text-slate-400">Open →</div>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-
-              <div className="mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4">
-                <p className="text-sm font-semibold text-emerald-100">Micro-win</p>
-                <p className="mt-1 text-xs text-emerald-200/80">
-                  Dashboard now behaves like a training command board. Next: wire sessions + Vision results into real logs.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer links */}
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-slate-800 bg-slate-900/40 p-5">
-          <div className="text-xs text-slate-400">
-            Everything should be traceable: plan → execution → review → correction.
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link className="text-xs text-slate-300 underline hover:text-emerald-200" href="/sensei">
-              Sensei
-            </Link>
-            <Link className="text-xs text-slate-300 underline hover:text-emerald-200" href="/sensei-vision">
-              SenseiVision
-            </Link>
-            <Link className="text-xs text-slate-300 underline hover:text-emerald-200" href="/fuel">
-              Fuel
-            </Link>
-            <Link className="text-xs text-slate-300 underline hover:text-emerald-200" href="/gyms">
-              Gyms
-            </Link>
-            <Link className="text-xs text-slate-300 underline hover:text-emerald-200" href="/membership">
-              Membership
-            </Link>
+              ) : null}
+            </Card>
           </div>
         </div>
       </div>

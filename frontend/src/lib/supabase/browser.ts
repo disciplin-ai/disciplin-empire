@@ -1,28 +1,32 @@
-"use client";
+// src/lib/supabase/browser.ts
 
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createBrowserClient } from "@supabase/ssr";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
-let client: SupabaseClient | null = null;
+let browserClient: SupabaseClient | null = null;
 
 export function getSupabaseBrowser(): SupabaseClient {
-  if (client) return client;
+  if (browserClient) return browserClient;
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const key =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
-  if (!url || !anon) {
-    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
+  console.log("[supabase browser] url found:", !!url);
+  console.log("[supabase browser] key found:", !!key);
+
+  if (!url) {
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL.");
   }
 
-  client = createClient(url, anon, {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: true,
-    },
-  });
+  if (!key) {
+    throw new Error(
+      "Missing NEXT_PUBLIC_SUPABASE_ANON_KEY or NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY."
+    );
+  }
 
-  return client;
+  browserClient = createBrowserClient(url, key);
+
+  return browserClient;
 }
-
-export const supabaseBrowser = getSupabaseBrowser;

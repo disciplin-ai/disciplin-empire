@@ -1,64 +1,28 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import type { FighterProfile } from "../components/ProfileProvider";
+import { useProfile, type DietType, type FighterProfile } from "./ProfileProvider";
 
-type ProfileFormProps = {
-  initialProfile: FighterProfile | null;
-  loading: boolean;
-  isLoggedIn: boolean;
-  onSave: (profile: FighterProfile) => Promise<{ ok: boolean; error?: string }>;
+type StepKey = "identity" | "experience" | "body" | "camp" | "nutrition";
+
+const STEP_ORDER: StepKey[] = [
+  "identity",
+  "experience",
+  "body",
+  "camp",
+  "nutrition",
+];
+
+const STEP_LABELS: Record<StepKey, string> = {
+  identity: "1. Identity",
+  experience: "2. Experience",
+  body: "3. Body & Style",
+  camp: "4. Camp & Boundaries",
+  nutrition: "5. Nutrition",
 };
 
-type ChoicePillProps = {
-  label: string;
-  value: string;
-  current: string;
-  onChange: (value: string) => void;
-};
-
-function ChoicePill({ label, value, current, onChange }: ChoicePillProps) {
-  const active = current === value;
-  return (
-    <button
-      type="button"
-      onClick={() => onChange(value)}
-      className={[
-        "px-3 py-1 rounded-full text-xs md:text-sm border transition",
-        active
-          ? "bg-emerald-500/10 border-emerald-400 text-emerald-200"
-          : "bg-slate-950 border-slate-700 text-slate-300 hover:border-emerald-400/60 hover:text-emerald-100",
-      ].join(" ")}
-    >
-      {label}
-    </button>
-  );
-}
-
-type TogglePillProps = {
-  label: string;
-  active: boolean;
-  onToggle: () => void;
-};
-
-function TogglePill({ label, active, onToggle }: TogglePillProps) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className={[
-        "px-3 py-1 rounded-full text-xs md:text-sm border transition",
-        active
-          ? "bg-emerald-500/10 border-emerald-400 text-emerald-200"
-          : "bg-slate-950 border-slate-700 text-slate-300 hover:border-emerald-400/60 hover:text-emerald-100",
-      ].join(" ")}
-    >
-      {label}
-    </button>
-  );
-}
-
-const SECONDARY_ARTS_OPTIONS = [
+const BASE_ART_OPTIONS = [
+  "MMA",
   "Boxing",
   "Muay Thai",
   "Kickboxing",
@@ -68,476 +32,707 @@ const SECONDARY_ARTS_OPTIONS = [
   "Sambo",
 ];
 
-const BASE_ART_OPTIONS = ["Wrestling", "Boxing", "Muay Thai", "Kickboxing", "BJJ", "Judo", "Sambo"];
 const STANCE_OPTIONS = ["Orthodox", "Southpaw", "Switch", "Open stance"];
-const BODY_TYPE_OPTIONS = ["Lean / wiry", "Athletic / balanced", "Stocky / powerful", "Tall / rangy"];
-const PACE_STYLE_OPTIONS = ["Slow & calculated", "Measured / mid pace", "High pace", "Chaotic / unpredictable"];
-const PRESSURE_OPTIONS = ["Back-foot / counter", "Balanced", "Forward pressure", "Smothering / non-stop"];
-const COMP_LEVEL_OPTIONS = ["Hobby", "Amateur", "Pro"];
 
-const STEPS = ["Identity", "Experience", "Body & Style", "Camp & Boundaries"] as const;
+const SECONDARY_ART_OPTIONS = [
+  "Boxing",
+  "Muay Thai",
+  "Kickboxing",
+  "Wrestling",
+  "BJJ",
+  "Judo",
+  "Sambo",
+];
 
-// Allow extra profile keys without forcing a type migration immediately:
-type ProfileKey =
-  | keyof FighterProfile
-  | "currentWeight"
-  | "targetWeight"
-  | "scheduleNotes"
-  | "boundariesNotes";
+const COMPETITION_LEVEL_OPTIONS = [
+  "Beginner",
+  "Novice",
+  "Amateur",
+  "Semi-Pro",
+  "Pro",
+];
 
-export default function ProfileForm({ initialProfile, loading, isLoggedIn, onSave }: ProfileFormProps) {
-  const [form, setForm] = useState<FighterProfile>({} as FighterProfile);
-  const [step, setStep] = useState(0);
+const DIET_OPTIONS: Array<{ value: DietType; label: string }> = [
+  { value: "none", label: "No specific diet" },
+  { value: "halal", label: "Halal" },
+  { value: "kosher", label: "Kosher" },
+  { value: "vegan", label: "Vegan" },
+  { value: "vegetarian", label: "Vegetarian" },
+  { value: "pescatarian", label: "Pescatarian" },
+  { value: "keto", label: "Keto" },
+];
 
+function cn(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(" ");
+}
+
+function parseLines(value: string): string[] {
+  return value
+    .split("\n")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+function linesFromArray(value?: string[]) {
+  return Array.isArray(value) ? value.join("\n") : "";
+}
+
+function textValue(value: string | number | undefined | null) {
+  if (typeof value === "number") return String(value);
+  return value ?? "";
+}
+
+function ChoicePills({
+  options,
+  value,
+  onChange,
+  multi = false,
+}: {
+  options: string[];
+  value: string | string[];
+  onChange: (next: string | string[]) => void;
+  multi?: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((option) => {
+        const active = multi
+          ? Array.isArray(value) && value.includes(option)
+          : value === option;
+
+        return (
+          <button
+            key={option}
+            type="button"
+            onClick={() => {
+              if (!multi) {
+                onChange(option);
+                return;
+              }
+
+              const arr = Array.isArray(value) ? value : [];
+              if (arr.includes(option)) {
+                onChange(arr.filter((v) => v !== option));
+              } else {
+                onChange([...arr, option]);
+              }
+            }}
+            className={cn(
+              "rounded-full border px-4 py-2 text-sm transition",
+              active
+                ? "border-emerald-400/60 bg-emerald-500/15 text-emerald-100"
+                : "border-slate-700/80 bg-slate-950/40 text-slate-200 hover:bg-slate-900/50"
+            )}
+          >
+            {option}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <div className="mb-2 text-sm text-slate-300">{label}</div>
+      {children}
+    </label>
+  );
+}
+
+function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={cn(
+        "w-full rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/20",
+        props.className
+      )}
+    />
+  );
+}
+
+function TextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      className={cn(
+        "w-full rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/20",
+        props.className
+      )}
+    />
+  );
+}
+
+const EMPTY_PROFILE: FighterProfile = {
+  name: "",
+  age: "",
+  height: "",
+  walkAroundWeight: "",
+  baseArt: "",
+  stance: "",
+  secondaryArts: [],
+  yearsTraining: "",
+  competitionLevel: "",
+  recentCamp: "",
+  campGoal: "",
+  bodyType: "",
+  paceStyle: "",
+  pressurePreference: "",
+  strengths: "",
+  weaknesses: "",
+  availability: "",
+  injuryHistory: "",
+  hardBoundaries: "",
+  lifeLoad: "",
+  scheduleNotes: "",
+  boundariesNotes: "",
+  fightDate: "",
+  weightClass: "",
+  currentWeight: undefined,
+  targetWeight: undefined,
+  dietType: "none",
+  allergies: [],
+  intolerances: [],
+  foodDislikes: [],
+  favoriteFoods: [],
+  avoidFoods: [],
+  religiousDietNotes: "",
+};
+
+export default function ProfileForm() {
+  const { profile, saveProfile, loading } = useProfile();
+
+  const [step, setStep] = useState<StepKey>("identity");
   const [saving, setSaving] = useState(false);
-  const [savedMsg, setSavedMsg] = useState<string | null>(null);
-  const [errMsg, setErrMsg] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const [form, setForm] = useState<FighterProfile>(EMPTY_PROFILE);
+
+  const [allergiesText, setAllergiesText] = useState("");
+  const [intolerancesText, setIntolerancesText] = useState("");
+  const [foodDislikesText, setFoodDislikesText] = useState("");
+  const [favoriteFoodsText, setFavoriteFoodsText] = useState("");
+  const [avoidFoodsText, setAvoidFoodsText] = useState("");
 
   useEffect(() => {
-    if (initialProfile) setForm(initialProfile);
-  }, [initialProfile]);
+    const p = profile ?? EMPTY_PROFILE;
 
-  const handleChange = (field: ProfileKey, value: any) => {
-    setForm((prev) => ({ ...(prev as any), [field]: value }));
-    setSavedMsg(null);
-    setErrMsg(null);
-  };
+    setForm({
+      ...EMPTY_PROFILE,
+      ...p,
+      secondaryArts: p.secondaryArts ?? [],
+      allergies: p.allergies ?? [],
+      intolerances: p.intolerances ?? [],
+      foodDislikes: p.foodDislikes ?? [],
+      favoriteFoods: p.favoriteFoods ?? [],
+      avoidFoods: p.avoidFoods ?? [],
+      dietType: p.dietType ?? "none",
+    });
 
-  const canGoBack = step > 0;
-  const isLastStep = step === STEPS.length - 1;
+    setAllergiesText(linesFromArray(p.allergies));
+    setIntolerancesText(linesFromArray(p.intolerances));
+    setFoodDislikesText(linesFromArray(p.foodDislikes));
+    setFavoriteFoodsText(linesFromArray(p.favoriteFoods));
+    setAvoidFoodsText(linesFromArray(p.avoidFoods));
+  }, [profile]);
 
-  const canSave = useMemo(() => true, []);
+  const currentIndex = useMemo(() => STEP_ORDER.indexOf(step), [step]);
 
-  const handleSave = async () => {
-    try {
-      setSaving(true);
-      setSavedMsg(null);
-      setErrMsg(null);
+  function patch<K extends keyof FighterProfile>(key: K, value: FighterProfile[K]) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
 
-      const res = await onSave(form);
-      if (!res.ok) {
-        setErrMsg(res.error ?? "Failed to save profile.");
-        return;
-      }
-
-      setSavedMsg("Saved ✓");
-      setTimeout(() => setSavedMsg(null), 2500);
-    } finally {
-      setSaving(false);
+  function goNext() {
+    if (currentIndex < STEP_ORDER.length - 1) {
+      setStep(STEP_ORDER[currentIndex + 1]);
     }
-  };
+  }
 
-  if (!loading && !isLoggedIn) {
+  function goBack() {
+    if (currentIndex > 0) {
+      setStep(STEP_ORDER[currentIndex - 1]);
+    }
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    setNotice(null);
+    setError(null);
+
+    const nextProfile: FighterProfile = {
+      ...form,
+      allergies: parseLines(allergiesText),
+      intolerances: parseLines(intolerancesText),
+      foodDislikes: parseLines(foodDislikesText),
+      favoriteFoods: parseLines(favoriteFoodsText),
+      avoidFoods: parseLines(avoidFoodsText),
+      currentWeight:
+        form.currentWeight === undefined || form.currentWeight === null || form.currentWeight === ("" as never)
+          ? undefined
+          : Number(form.currentWeight),
+      targetWeight:
+        form.targetWeight === undefined || form.targetWeight === null || form.targetWeight === ("" as never)
+          ? undefined
+          : Number(form.targetWeight),
+    };
+
+    const result = await saveProfile(nextProfile);
+
+    setSaving(false);
+
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+
+    setNotice("Profile saved.");
+  }
+
+  if (loading) {
     return (
-      <main className="min-h-screen bg-slate-950 text-slate-50 px-6 py-12 md:px-16">
-        <div className="max-w-3xl mx-auto rounded-3xl border border-slate-800 bg-slate-900/40 p-8">
-          <p className="text-sm text-slate-200 font-semibold">You’re not logged in.</p>
-          <p className="mt-2 text-xs text-slate-400">Go to the Auth page and sign in, then come back.</p>
-        </div>
-      </main>
+      <div className="rounded-3xl border border-slate-800/60 bg-slate-950/25 p-6 text-sm text-slate-300">
+        Loading profile...
+      </div>
     );
   }
 
-  const currentWeight = ((form as any).currentWeight ?? "") as string;
-  const targetWeight = ((form as any).targetWeight ?? "") as string;
-  const scheduleNotes = ((form as any).scheduleNotes ?? "") as string;
-  const boundariesNotes = ((form as any).boundariesNotes ?? "") as string;
-
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-50 px-6 py-12 md:px-16">
-      <div className="max-w-5xl mx-auto">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold tracking-[0.25em] text-emerald-400">PROFILE</p>
-            <h1 className="mt-2 text-3xl font-semibold text-slate-50">Camp identity</h1>
-            <p className="mt-2 text-sm text-slate-400 max-w-xl">
-              Fill this once. Sensei + Fuel + Vision should pull this automatically.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {savedMsg && (
-              <span className="text-[11px] px-3 py-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 text-emerald-200">
-                {savedMsg}
-              </span>
-            )}
-            {errMsg && (
-              <span className="text-[11px] px-3 py-1 rounded-full border border-red-500/40 bg-red-500/10 text-red-200">
-                {errMsg}
-              </span>
-            )}
-          </div>
+    <div className="rounded-3xl border border-slate-800/60 bg-slate-950/25 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
+      <div className="border-b border-slate-800/40 px-6 py-6">
+        <div className="text-[11px] font-semibold tracking-[0.32em] text-emerald-300">
+          PROFILE
         </div>
+        <h1 className="mt-2 text-2xl font-semibold text-white">Camp identity</h1>
+        <p className="mt-2 text-sm text-slate-300/70">
+          Fill this once. Sensei + Fuel + Vision should pull this automatically.
+        </p>
 
-        {/* Stepper */}
-        <div className="flex flex-wrap gap-3 my-8">
-          {STEPS.map((label, idx) => {
-            const active = idx === step;
-            const complete = idx < step;
+        <div className="mt-5 flex flex-wrap gap-2">
+          {STEP_ORDER.map((key) => {
+            const active = key === step;
+
             return (
               <button
-                key={label}
+                key={key}
                 type="button"
-                onClick={() => setStep(idx)}
-                className={[
-                  "px-4 py-2 rounded-full text-sm border transition",
+                onClick={() => setStep(key)}
+                className={cn(
+                  "rounded-full border px-4 py-2 text-sm transition",
                   active
-                    ? "bg-emerald-500 text-black border-emerald-500"
-                    : complete
-                    ? "bg-emerald-900/40 text-emerald-300 border-emerald-600/60"
-                    : "bg-slate-950 text-slate-200 border-slate-700 hover:bg-slate-900",
-                ].join(" ")}
+                    ? "border-emerald-400/70 bg-emerald-500/15 text-emerald-100"
+                    : "border-slate-700/80 bg-slate-950/40 text-slate-200 hover:bg-slate-900/50"
+                )}
               >
-                {idx + 1}. {label}
+                {STEP_LABELS[key]}
               </button>
             );
           })}
         </div>
+      </div>
 
-        <div className="bg-slate-900/40 border border-slate-800 rounded-3xl p-6 md:p-8 space-y-8">
-          {/* STEP 1 */}
-          {step === 0 && (
-            <div className="space-y-8">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Name / Nickname</label>
-                  <input
-                    className="w-full rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50 placeholder:text-slate-500"
-                    placeholder="Your name"
-                    value={form.name ?? ""}
-                    onChange={(e) => handleChange("name", e.target.value)}
-                  />
-                </div>
+      <div className="px-6 py-6">
+        {step === "identity" && (
+          <div className="grid gap-6 md:grid-cols-2">
+            <Field label="Name / Nickname">
+              <TextInput
+                value={textValue(form.name)}
+                onChange={(e) => patch("name", e.target.value)}
+                placeholder="Dylan"
+              />
+            </Field>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Age</label>
-                  <input
-                    className="w-full rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50"
-                    placeholder="e.g. 16"
-                    value={form.age ?? ""}
-                    onChange={(e) => handleChange("age", e.target.value)}
-                  />
-                </div>
+            <Field label="Age">
+              <TextInput
+                value={textValue(form.age)}
+                onChange={(e) => patch("age", e.target.value)}
+                placeholder="16"
+              />
+            </Field>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Height</label>
-                  <input
-                    className="w-full rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50"
-                    placeholder="e.g. 175 cm"
-                    value={form.height ?? ""}
-                    onChange={(e) => handleChange("height", e.target.value)}
-                  />
-                </div>
+            <Field label="Height">
+              <TextInput
+                value={textValue(form.height)}
+                onChange={(e) => patch("height", e.target.value)}
+                placeholder="175 cm"
+              />
+            </Field>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Walk-around weight</label>
-                  <input
-                    className="w-full rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50"
-                    placeholder="e.g. 74 kg"
-                    value={form.walkAroundWeight ?? ""}
-                    onChange={(e) => handleChange("walkAroundWeight", e.target.value)}
-                  />
-                </div>
+            <Field label="Walk-around weight">
+              <TextInput
+                value={textValue(form.walkAroundWeight)}
+                onChange={(e) => patch("walkAroundWeight", e.target.value)}
+                placeholder="70 kg"
+              />
+            </Field>
 
-                {/* ✅ NEW: Current + Target weight */}
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Current weight</label>
-                  <input
-                    className="w-full rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50"
-                    placeholder="e.g. 72 kg"
-                    value={currentWeight}
-                    onChange={(e) => handleChange("currentWeight", e.target.value)}
-                  />
-                </div>
+            <Field label="Current weight">
+              <TextInput
+                type="number"
+                step="0.1"
+                value={textValue(form.currentWeight)}
+                onChange={(e) =>
+                  patch(
+                    "currentWeight",
+                    e.target.value === "" ? undefined : Number(e.target.value)
+                  )
+                }
+                placeholder="68.2"
+              />
+            </Field>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Target weight</label>
-                  <input
-                    className="w-full rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50"
-                    placeholder="e.g. 75 kg"
-                    value={targetWeight}
-                    onChange={(e) => handleChange("targetWeight", e.target.value)}
-                  />
-                </div>
-              </div>
+            <Field label="Target weight">
+              <TextInput
+                type="number"
+                step="0.1"
+                value={textValue(form.targetWeight)}
+                onChange={(e) =>
+                  patch(
+                    "targetWeight",
+                    e.target.value === "" ? undefined : Number(e.target.value)
+                  )
+                }
+                placeholder="66"
+              />
+            </Field>
 
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Base art</label>
-                <div className="flex flex-wrap gap-2">
-                  {BASE_ART_OPTIONS.map((art) => (
-                    <ChoicePill
-                      key={art}
-                      label={art}
-                      value={art}
-                      current={form.baseArt ?? ""}
-                      onChange={(v) => handleChange("baseArt", v)}
-                    />
-                  ))}
-                </div>
-              </div>
+            <Field label="Fight date">
+              <TextInput
+                type="date"
+                value={textValue(form.fightDate)}
+                onChange={(e) => patch("fightDate", e.target.value)}
+              />
+            </Field>
 
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Stance</label>
-                <div className="flex flex-wrap gap-2">
-                  {STANCE_OPTIONS.map((stance) => (
-                    <ChoicePill
-                      key={stance}
-                      label={stance}
-                      value={stance}
-                      current={form.stance ?? ""}
-                      onChange={(v) => handleChange("stance", v)}
-                    />
-                  ))}
-                </div>
-              </div>
+            <Field label="Weight class">
+              <TextInput
+                value={textValue(form.weightClass)}
+                onChange={(e) => patch("weightClass", e.target.value)}
+                placeholder="66 kg"
+              />
+            </Field>
 
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Secondary arts</label>
-                <div className="flex flex-wrap gap-2">
-                  {SECONDARY_ARTS_OPTIONS.map((art) => {
-                    const list = form.secondaryArts ?? [];
-                    const active = list.includes(art);
-                    return (
-                      <TogglePill
-                        key={art}
-                        label={art}
-                        active={active}
-                        onToggle={() => {
-                          const curr = form.secondaryArts ?? [];
-                          const next = curr.includes(art)
-                            ? curr.filter((x) => x !== art)
-                            : [...curr, art];
-                          handleChange("secondaryArts", next);
-                        }}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
+            <div className="md:col-span-2">
+              <Field label="Base art">
+                <ChoicePills
+                  options={BASE_ART_OPTIONS}
+                  value={textValue(form.baseArt)}
+                  onChange={(next) => patch("baseArt", String(next))}
+                />
+              </Field>
             </div>
-          )}
 
-          {/* STEP 2 */}
-          {step === 1 && (
-            <div className="space-y-8">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Years training</label>
-                  <input
-                    className="w-full rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50"
-                    placeholder="e.g. 3"
-                    value={form.yearsTraining ?? ""}
-                    onChange={(e) => handleChange("yearsTraining", e.target.value)}
-                  />
-                </div>
-
-                {/* ✅ Competition level pills */}
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Competition level</label>
-                  <div className="flex flex-wrap gap-2">
-                    {COMP_LEVEL_OPTIONS.map((lvl) => (
-                      <ChoicePill
-                        key={lvl}
-                        label={lvl}
-                        value={lvl}
-                        current={form.competitionLevel ?? ""}
-                        onChange={(v) => handleChange("competitionLevel", v)}
-                      />
-                    ))}
-                  </div>
-                  <p className="mt-2 text-[11px] text-slate-500">
-                    This controls how aggressive Sensei pushes volume + intensity.
-                  </p>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Recent camp / training block</label>
-                <textarea
-                  className="w-full min-h-[90px] rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50 placeholder:text-slate-500"
-                  value={form.recentCamp ?? ""}
-                  onChange={(e) => handleChange("recentCamp", e.target.value)}
+            <div className="md:col-span-2">
+              <Field label="Stance">
+                <ChoicePills
+                  options={STANCE_OPTIONS}
+                  value={textValue(form.stance)}
+                  onChange={(next) => patch("stance", String(next))}
                 />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">12-month goal</label>
-                <textarea
-                  className="w-full min-h-[90px] rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50 placeholder:text-slate-500"
-                  value={form.campGoal ?? ""}
-                  onChange={(e) => handleChange("campGoal", e.target.value)}
-                  placeholder="Example: bulk to 75kg, improve wrestling pace, fight amateur this year."
-                />
-              </div>
+              </Field>
             </div>
-          )}
 
-          {/* STEP 3 */}
-          {step === 2 && (
-            <div className="space-y-8">
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Body type</label>
-                <div className="flex flex-wrap gap-2">
-                  {BODY_TYPE_OPTIONS.map((bt) => (
-                    <ChoicePill
-                      key={bt}
-                      label={bt}
-                      value={bt}
-                      current={form.bodyType ?? ""}
-                      onChange={(v) => handleChange("bodyType", v)}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Pace style</label>
-                <div className="flex flex-wrap gap-2">
-                  {PACE_STYLE_OPTIONS.map((ps) => (
-                    <ChoicePill
-                      key={ps}
-                      label={ps}
-                      value={ps}
-                      current={form.paceStyle ?? ""}
-                      onChange={(v) => handleChange("paceStyle", v)}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Pressure preference</label>
-                <div className="flex flex-wrap gap-2">
-                  {PRESSURE_OPTIONS.map((pr) => (
-                    <ChoicePill
-                      key={pr}
-                      label={pr}
-                      value={pr}
-                      current={form.pressurePreference ?? ""}
-                      onChange={(v) => handleChange("pressurePreference", v)}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Strengths</label>
-                <textarea
-                  className="w-full min-h-[90px] rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50"
-                  value={form.strengths ?? ""}
-                  onChange={(e) => handleChange("strengths", e.target.value)}
+            <div className="md:col-span-2">
+              <Field label="Secondary arts">
+                <ChoicePills
+                  options={SECONDARY_ART_OPTIONS}
+                  value={form.secondaryArts ?? []}
+                  onChange={(next) => patch("secondaryArts", next as string[])}
+                  multi
                 />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Weaknesses</label>
-                <textarea
-                  className="w-full min-h-[90px] rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50"
-                  value={form.weaknesses ?? ""}
-                  onChange={(e) => handleChange("weaknesses", e.target.value)}
-                />
-              </div>
+              </Field>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* STEP 4 */}
-          {step === 3 && (
-            <div className="space-y-8">
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Weekly availability</label>
-                <textarea
-                  className="w-full min-h-[70px] rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50"
-                  value={form.availability ?? ""}
-                  onChange={(e) => handleChange("availability", e.target.value)}
-                  placeholder="Example: Mon/Wed/Fri evenings + Sat morning"
-                />
-              </div>
+        {step === "experience" && (
+          <div className="grid gap-6 md:grid-cols-2">
+            <Field label="Years training">
+              <TextInput
+                value={textValue(form.yearsTraining)}
+                onChange={(e) => patch("yearsTraining", e.target.value)}
+                placeholder="3"
+              />
+            </Field>
 
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Injury history</label>
-                <textarea
-                  className="w-full min-h-[70px] rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50"
-                  value={form.injuryHistory ?? ""}
-                  onChange={(e) => handleChange("injuryHistory", e.target.value)}
-                  placeholder="Example: partial meniscectomy (fully recovered), avoid junk volume spikes"
-                />
-              </div>
+            <Field label="Competition level">
+              <ChoicePills
+                options={COMPETITION_LEVEL_OPTIONS}
+                value={textValue(form.competitionLevel)}
+                onChange={(next) => patch("competitionLevel", String(next))}
+              />
+            </Field>
 
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Hard boundaries</label>
-                <textarea
-                  className="w-full min-h-[70px] rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50"
-                  value={form.hardBoundaries ?? ""}
-                  onChange={(e) => handleChange("hardBoundaries", e.target.value)}
-                  placeholder="Example: no hard sparring after Thu; no max sprints after hard wrestling"
+            <div className="md:col-span-2">
+              <Field label="Recent camp">
+                <TextArea
+                  rows={4}
+                  value={textValue(form.recentCamp)}
+                  onChange={(e) => patch("recentCamp", e.target.value)}
+                  placeholder="What happened in your last camp?"
                 />
-              </div>
-
-              {/* ✅ NEW: Schedule + Boundaries notes */}
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Schedule notes</label>
-                <textarea
-                  className="w-full min-h-[70px] rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50"
-                  value={scheduleNotes}
-                  onChange={(e) => handleChange("scheduleNotes", e.target.value)}
-                  placeholder="Example: school 8–3, MMA Mon/Wed/Fri 5pm, best window 6–9pm"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Boundaries notes</label>
-                <textarea
-                  className="w-full min-h-[70px] rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50"
-                  value={boundariesNotes}
-                  onChange={(e) => handleChange("boundariesNotes", e.target.value)}
-                  placeholder="Example: protect knee; don’t stack hard wrestling + max sprints same day"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Life load</label>
-                <textarea
-                  className="w-full min-h-[70px] rounded-lg bg-slate-950/60 border border-slate-700 px-3 py-2 text-sm text-slate-50"
-                  value={form.lifeLoad ?? ""}
-                  onChange={(e) => handleChange("lifeLoad", e.target.value)}
-                  placeholder="Example: school exams week; low sleep; stress high"
-                />
-              </div>
+              </Field>
             </div>
-          )}
 
-          {/* Nav buttons */}
-          <div className="flex items-center justify-between pt-6 border-t border-slate-800">
-            <button
-              type="button"
-              disabled={!canGoBack}
-              onClick={() => setStep((s) => (s > 0 ? s - 1 : s))}
-              className="px-4 py-2 rounded-lg border border-slate-700 text-sm text-slate-200 hover:bg-slate-900 disabled:opacity-40"
-            >
-              Back
-            </button>
+            <div className="md:col-span-2">
+              <Field label="Current camp goal">
+                <TextArea
+                  rows={4}
+                  value={textValue(form.campGoal)}
+                  onChange={(e) => patch("campGoal", e.target.value)}
+                  placeholder="Fight prep, technical correction, weight cut, cardio focus..."
+                />
+              </Field>
+            </div>
+          </div>
+        )}
 
-            {!isLastStep ? (
+        {step === "body" && (
+          <div className="grid gap-6 md:grid-cols-2">
+            <Field label="Body type">
+              <TextInput
+                value={textValue(form.bodyType)}
+                onChange={(e) => patch("bodyType", e.target.value)}
+                placeholder="Compact, long, explosive, stocky..."
+              />
+            </Field>
+
+            <Field label="Pace style">
+              <TextInput
+                value={textValue(form.paceStyle)}
+                onChange={(e) => patch("paceStyle", e.target.value)}
+                placeholder="High pace, measured pace, burst pace..."
+              />
+            </Field>
+
+            <Field label="Pressure preference">
+              <TextInput
+                value={textValue(form.pressurePreference)}
+                onChange={(e) => patch("pressurePreference", e.target.value)}
+                placeholder="Forward pressure, counter pressure..."
+              />
+            </Field>
+
+            <div className="md:col-span-2">
+              <Field label="Strengths">
+                <TextArea
+                  rows={4}
+                  value={textValue(form.strengths)}
+                  onChange={(e) => patch("strengths", e.target.value)}
+                  placeholder="Top pressure, chain wrestling, jab, timing..."
+                />
+              </Field>
+            </div>
+
+            <div className="md:col-span-2">
+              <Field label="Weaknesses">
+                <TextArea
+                  rows={4}
+                  value={textValue(form.weaknesses)}
+                  onChange={(e) => patch("weaknesses", e.target.value)}
+                  placeholder="Fatigue, defence, overcommitting, bad exits..."
+                />
+              </Field>
+            </div>
+          </div>
+        )}
+
+        {step === "camp" && (
+          <div className="grid gap-6">
+            <Field label="Weekly availability">
+              <TextArea
+                rows={3}
+                value={textValue(form.availability)}
+                onChange={(e) => patch("availability", e.target.value)}
+                placeholder="Every day / Mon Wed Fri evenings / school schedule..."
+              />
+            </Field>
+
+            <Field label="Injury history">
+              <TextArea
+                rows={3}
+                value={textValue(form.injuryHistory)}
+                onChange={(e) => patch("injuryHistory", e.target.value)}
+                placeholder="Knee, shoulder, ankle, back..."
+              />
+            </Field>
+
+            <Field label="Hard boundaries">
+              <TextArea
+                rows={3}
+                value={textValue(form.hardBoundaries)}
+                onChange={(e) => patch("hardBoundaries", e.target.value)}
+                placeholder="No heavy cuts below 68kg, no hard wrestling after sprint days..."
+              />
+            </Field>
+
+            <Field label="Schedule notes">
+              <TextArea
+                rows={3}
+                value={textValue(form.scheduleNotes)}
+                onChange={(e) => patch("scheduleNotes", e.target.value)}
+                placeholder="School 8–3, MMA Mon/Wed/Fri 5pm..."
+              />
+            </Field>
+
+            <Field label="Boundaries notes">
+              <TextArea
+                rows={3}
+                value={textValue(form.boundariesNotes)}
+                onChange={(e) => patch("boundariesNotes", e.target.value)}
+                placeholder="Protect knee, avoid stacking max wrestling + max sprints..."
+              />
+            </Field>
+
+            <Field label="Life load">
+              <TextArea
+                rows={3}
+                value={textValue(form.lifeLoad)}
+                onChange={(e) => patch("lifeLoad", e.target.value)}
+                placeholder="Exam season, family load, poor sleep, travel..."
+              />
+            </Field>
+          </div>
+        )}
+
+        {step === "nutrition" && (
+          <div className="grid gap-6">
+            <Field label="Diet type">
+              <div className="flex flex-wrap gap-2">
+                {DIET_OPTIONS.map((option) => {
+                  const active = (form.dietType ?? "none") === option.value;
+
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => patch("dietType", option.value)}
+                      className={cn(
+                        "rounded-full border px-4 py-2 text-sm transition",
+                        active
+                          ? "border-emerald-400/70 bg-emerald-500/15 text-emerald-100"
+                          : "border-slate-700/80 bg-slate-950/40 text-slate-200 hover:bg-slate-900/50"
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+
+            <Field label="Allergies (one per line)">
+              <TextArea
+                rows={4}
+                value={allergiesText}
+                onChange={(e) => setAllergiesText(e.target.value)}
+                placeholder={"Peanuts\nShellfish\nEggs"}
+              />
+            </Field>
+
+            <Field label="Intolerances (one per line)">
+              <TextArea
+                rows={4}
+                value={intolerancesText}
+                onChange={(e) => setIntolerancesText(e.target.value)}
+                placeholder={"Lactose\nGluten"}
+              />
+            </Field>
+
+            <Field label="Foods you dislike (one per line)">
+              <TextArea
+                rows={4}
+                value={foodDislikesText}
+                onChange={(e) => setFoodDislikesText(e.target.value)}
+                placeholder={"Liver\nMushrooms"}
+              />
+            </Field>
+
+            <Field label="Favorite foods (one per line)">
+              <TextArea
+                rows={4}
+                value={favoriteFoodsText}
+                onChange={(e) => setFavoriteFoodsText(e.target.value)}
+                placeholder={"Rice\nChicken\nGreek yogurt"}
+              />
+            </Field>
+
+            <Field label="Foods to avoid completely (one per line)">
+              <TextArea
+                rows={4}
+                value={avoidFoodsText}
+                onChange={(e) => setAvoidFoodsText(e.target.value)}
+                placeholder={"Pork\nAlcohol\nDeep fried food"}
+              />
+            </Field>
+
+            <Field label="Religious / diet notes">
+              <TextArea
+                rows={4}
+                value={textValue(form.religiousDietNotes)}
+                onChange={(e) => patch("religiousDietNotes", e.target.value)}
+                placeholder="Halal only, no pork, no non-halal gelatin, fasting windows, kosher rules..."
+              />
+            </Field>
+          </div>
+        )}
+
+        {(notice || error) && (
+          <div className="mt-6">
+            {notice ? (
+              <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+                {notice}
+              </div>
+            ) : null}
+
+            {error ? (
+              <div className="rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                {error}
+              </div>
+            ) : null}
+          </div>
+        )}
+
+        <div className="mt-8 flex items-center justify-between gap-3 border-t border-slate-800/40 pt-6">
+          <button
+            type="button"
+            onClick={goBack}
+            disabled={currentIndex === 0}
+            className="rounded-2xl border border-slate-700/80 bg-slate-950/30 px-4 py-3 text-sm text-slate-200 transition hover:bg-slate-900/40 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Back
+          </button>
+
+          <div className="flex items-center gap-3">
+            {currentIndex < STEP_ORDER.length - 1 ? (
               <button
                 type="button"
-                onClick={() => setStep((s) => (s < STEPS.length - 1 ? s + 1 : s))}
-                className="px-4 py-2 rounded-lg bg-emerald-500 text-black text-sm font-semibold hover:bg-emerald-400"
+                onClick={goNext}
+                className="rounded-2xl bg-emerald-400/95 px-5 py-3 text-sm font-medium text-slate-950 hover:bg-emerald-300"
               >
                 Next step
               </button>
             ) : (
               <button
                 type="button"
-                disabled={saving || loading || !canSave}
                 onClick={handleSave}
-                className="px-4 py-2 rounded-lg bg-emerald-500 text-black text-sm font-semibold hover:bg-emerald-400 disabled:opacity-60"
+                disabled={saving}
+                className="rounded-2xl bg-emerald-400/95 px-5 py-3 text-sm font-medium text-slate-950 hover:bg-emerald-300 disabled:opacity-60"
               >
-                {saving ? "Saving…" : "Save profile"}
+                {saving ? "Saving..." : "Save profile"}
               </button>
             )}
           </div>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

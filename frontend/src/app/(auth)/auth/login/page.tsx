@@ -1,72 +1,115 @@
 "use client";
 
-import React, { useState } from "react";
-import { useRouter } from "next/navigation";
-import { supabaseBrowser } from "../../../../lib/supabase/browser";
+import React, { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { getSupabaseBrowser } from "../../../../lib/supabase/browser";
+import { useProfile } from "@/components/ProfileProvider";
 
 export default function LoginPage() {
   const router = useRouter();
-  const supabase = supabaseBrowser();
+  const searchParams = useSearchParams();
+  const supabase = useMemo(() => getSupabaseBrowser(), []);
+  const { user, loading } = useProfile();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    searchParams.get("error") ?? null
+  );
 
   const [loadingEmail, setLoadingEmail] = useState(false);
   const [loadingGoogle, setLoadingGoogle] = useState(false);
+
+  useEffect(() => {
+    if (!loading && user) {
+      router.replace("/dashboard");
+      router.refresh();
+    }
+  }, [loading, user, router]);
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoadingEmail(true);
 
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
+    try {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
 
-    if (signInError) {
+      if (signInError) {
+        setLoadingEmail(false);
+        setError(signInError.message);
+        return;
+      }
+
+      const { data, error: sessionError } = await supabase.auth.getSession();
+
       setLoadingEmail(false);
-      setError(signInError.message);
-      return;
+
+      if (sessionError) {
+        setError(sessionError.message);
+        return;
+      }
+
+      if (!data.session) {
+        setError("Signed in, but no session was created.");
+        return;
+      }
+
+      router.push("/dashboard");
+      router.refresh();
+    } catch (err) {
+      console.error("[login] email login failed:", err);
+      setLoadingEmail(false);
+      setError("Failed to sign in with email.");
     }
-
-    // Ensure session exists before navigating
-    const { data, error: sessionError } = await supabase.auth.getSession();
-
-    setLoadingEmail(false);
-
-    if (sessionError) {
-      setError(sessionError.message);
-      return;
-    }
-
-    if (!data.session) {
-      setError("Signed in, but no session was created. Please retry or use Google login.");
-      return;
-    }
-
-    router.push("/dashboard");
-    router.refresh();
   };
 
   const handleGoogleLogin = async () => {
+    if (loadingGoogle) return;
+
     setError(null);
     setLoadingGoogle(true);
 
-    const { error: oauthError } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
+    try {
+      const redirectTo = `${window.location.origin}/auth/callback`;
 
-    setLoadingGoogle(false);
+      const { data, error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo,
+          queryParams: {
+            prompt: "select_account",
+          },
+        },
+      });
 
-    if (oauthError) setError(oauthError.message);
+      if (oauthError) {
+        console.error("[login] OAuth error:", oauthError);
+        setLoadingGoogle(false);
+        setError(oauthError.message);
+        return;
+      }
+
+      console.log("[login] OAuth started:", data?.url ?? "no url returned");
+    } catch (err) {
+      console.error("[login] Google login failed:", err);
+      setLoadingGoogle(false);
+      setError("Failed to start Google sign-in.");
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-50 px-4">
+        <div className="text-sm text-slate-400">Loading...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-50 px-4">
@@ -77,11 +120,12 @@ export default function LoginPage() {
         </p>
 
         <button
+          type="button"
           onClick={handleGoogleLogin}
           disabled={loadingGoogle}
           className="mt-6 w-full rounded-lg bg-slate-100 text-slate-900 py-2 text-sm font-medium hover:bg-white transition disabled:opacity-60"
         >
-          {loadingGoogle ? "Connecting…" : "Continue with Google"}
+          {loadingGoogle ? "Redirecting…" : "Continue with Google"}
         </button>
 
         <button
