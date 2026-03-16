@@ -1,11 +1,11 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getSupabaseBrowser } from "../../../../lib/supabase/browser";
 import { useProfile } from "@/components/ProfileProvider";
 
-export default function LoginPage() {
+function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = useMemo(() => getSupabaseBrowser(), []);
@@ -76,7 +76,7 @@ export default function LoginPage() {
     setLoadingGoogle(true);
 
     try {
-      const redirectTo = `${window.location.origin}/auth/callback`;
+      const redirectTo = `${window.location.origin}/auth/callback?next=/dashboard`;
 
       const { data, error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: "google",
@@ -192,5 +192,19 @@ export default function LoginPage() {
         </form>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-50 px-4">
+          <div className="text-sm text-slate-400">Loading...</div>
+        </div>
+      }
+    >
+      <LoginPageInner />
+    </Suspense>
   );
 }
