@@ -31,5 +31,5 @@ export function getSupabaseBrowser(): SupabaseClient {
   return browserClient;
 }
 
-// Backward-compatible export for older files still importing `supabaseBrowser`
+// Object-style legacy import support
 export const supabaseBrowser = getSupabaseBrowser();
