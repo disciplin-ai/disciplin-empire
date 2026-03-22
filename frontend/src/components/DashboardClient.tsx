@@ -212,6 +212,28 @@ function getMissionBlocks(camp: SavedCamp | null) {
   };
 }
 
+function getFuelTone(score?: number): "good" | "warn" | "bad" | "neutral" {
+  if (typeof score !== "number") return "neutral";
+  if (score >= 75) return "good";
+  if (score >= 50) return "warn";
+  return "bad";
+}
+
+function fuelStatusLine(score?: number) {
+  if (typeof score !== "number") return "No recent Fuel analysis.";
+  if (score >= 80) return "Fuel support is strong for current camp load.";
+  if (score >= 60) return "Fuel support is acceptable, but there is room to tighten execution.";
+  if (score >= 40) return "Fuel support is under target for reliable camp output.";
+  return "Fuel support is weak and likely hurting recovery or performance.";
+}
+
+function fuelSnippet(report?: string) {
+  const text = String(report || "").replace(/\s+/g, " ").trim();
+  if (!text) return "Run Fuel AI to generate a nutrition report tied to your training.";
+  if (text.length <= 170) return text;
+  return `${text.slice(0, 169).trim()}…`;
+}
+
 export default function DashboardClient() {
   const { fighterContext } = useFighterContext();
 
@@ -459,6 +481,50 @@ export default function DashboardClient() {
 
           <div className="space-y-6 xl:col-span-4">
             <Card
+              title="Fuel status"
+              sub="Nutrition readiness for current camp load."
+              right={
+                fuel?.score !== undefined ? (
+                  <Badge tone={getFuelTone(fuel.score)}>Score {Math.round(fuel.score)}</Badge>
+                ) : (
+                  <Badge tone="warn">Missing</Badge>
+                )
+              }
+            >
+              <div className="space-y-4">
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">
+                      Nutrition status
+                    </div>
+                    <Badge tone={fuel?.score !== undefined ? getFuelTone(fuel.score) : "neutral"}>
+                      {fuel?.score !== undefined ? "Connected" : "No report"}
+                    </Badge>
+                  </div>
+                  <div className="mt-3 text-sm text-slate-100">
+                    {fuelStatusLine(fuel?.score)}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">
+                    Latest Fuel note
+                  </div>
+                  <div className="mt-3 text-sm leading-6 text-slate-300/85">
+                    {fuelSnippet(fuel?.report)}
+                  </div>
+                </div>
+
+                <Link
+                  href="/fuel"
+                  className="block rounded-2xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-100 hover:bg-emerald-500/10"
+                >
+                  Open Fuel AI
+                </Link>
+              </div>
+            </Card>
+
+            <Card
               title="Weight tracking"
               sub="Trajectory toward fight weight."
               right={<Badge tone={statusTone(weightStatus)}>{weightStatus}</Badge>}
@@ -600,18 +666,6 @@ export default function DashboardClient() {
                   View Camp Plan
                 </Link>
               </div>
-
-              {fuel?.score !== undefined ? (
-                <div className="mt-4 rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Fuel status</div>
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <div className="text-sm text-slate-100">Latest Fuel AI score</div>
-                    <Badge tone={fuel.score >= 75 ? "good" : fuel.score >= 50 ? "warn" : "bad"}>
-                      {Math.round(fuel.score)}
-                    </Badge>
-                  </div>
-                </div>
-              ) : null}
             </Card>
           </div>
         </div>

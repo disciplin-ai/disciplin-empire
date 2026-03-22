@@ -52,6 +52,27 @@ type GymRow = {
   slug: string | null;
 };
 
+type SenseiDecisionResponse = {
+  ok: true;
+  assessment: string;
+  impact: string;
+  decision: string;
+  next_steps: string[];
+};
+
+type SenseiErrorResponse = {
+  ok: false;
+  error: string;
+};
+
+type SenseiApiResponse = SenseiDecisionResponse | SenseiErrorResponse;
+
+type FuelMemory = {
+  score?: number;
+  report?: string;
+  followups_id?: string;
+};
+
 function uid() {
   return Math.random().toString(36).slice(2);
 }
@@ -72,7 +93,7 @@ function safeParseVision(): VisionAnalysis | null {
   }
 }
 
-function safeParseFuel(): { score?: number; report?: string; followups_id?: string } | null {
+function safeParseFuel(): FuelMemory | null {
   try {
     const raw = localStorage.getItem("disciplin_latest_fuel");
     if (!raw) return null;
@@ -144,6 +165,13 @@ function inferProfilePriority(profile: any): {
   return { primaryStyle: "mixed", paceStyle: pace };
 }
 
+function deriveFuelState(fuel: FuelMemory | null): "good" | "mid" | "bad" | "unknown" {
+  if (!fuel || typeof fuel.score !== "number") return "unknown";
+  if (fuel.score >= 75) return "good";
+  if (fuel.score >= 50) return "mid";
+  return "bad";
+}
+
 function buildDirective(v: VisionAnalysis | null, focus: FocusKey): CampDirective {
   if (!v) {
     return {
@@ -169,10 +197,16 @@ function buildDirective(v: VisionAnalysis | null, focus: FocusKey): CampDirectiv
   };
 }
 
-function buildTraining(v: VisionAnalysis | null, focus: FocusKey, constraints: string): TrainingFocus {
+function buildTraining(
+  v: VisionAnalysis | null,
+  focus: FocusKey,
+  constraints: string,
+  fuel: FuelMemory | null
+): TrainingFocus {
   const c = constraints.toLowerCase();
   const knee = c.includes("knee");
   const noPartner = c.includes("no partner");
+  const fuelState = deriveFuelState(fuel);
 
   const weaknesses = deriveWeaknessTags(v);
 
@@ -190,6 +224,16 @@ function buildTraining(v: VisionAnalysis | null, focus: FocusKey, constraints: s
   if (focus === "Recovery") secondary.push("Flow + mobility: leave fresher than you arrived.");
   if (focus === "Mixed") secondary.push("Balanced rounds: 3x striking + 3x grappling focus blocks.");
 
+  if (fuelState === "bad") {
+    primary.unshift("Technical reps only: do not rely on conditioning to carry the session.");
+    avoid.push("High volume sparring under poor fuel conditions.");
+    avoid.push("Hard conditioning blocks while energy support is compromised.");
+  }
+
+  if (fuelState === "mid") {
+    avoid.push("Long output-heavy sessions without nutrition support.");
+  }
+
   if (noPartner) avoid.push("Hard sparring as a substitute for real reps.");
   if (knee) avoid.push("Hard pivots / reckless shots until warmed + stable.");
   avoid.push("High volume chaos sessions that don’t target the directive.");
@@ -197,25 +241,68 @@ function buildTraining(v: VisionAnalysis | null, focus: FocusKey, constraints: s
   return { primary, secondary, avoid };
 }
 
-function buildControl(v: VisionAnalysis | null, constraints: string): CampControl {
+function buildControl(
+  v: VisionAnalysis | null,
+  constraints: string,
+  fuel: FuelMemory | null
+): CampControl {
   const c = constraints.toLowerCase();
   const fightWeek = c.includes("fight week") || c.includes("weigh-in");
   const injury = c.includes("knee") || c.includes("shoulder") || c.includes("back");
+  const fuelState = deriveFuelState(fuel);
 
   const highFindings = (v?.findings ?? []).filter((f) => f.severity === "HIGH").length;
 
   let trainingLoad: CampControl["trainingLoad"] = "MODERATE";
+
+  if (fuelState === "bad") trainingLoad = "LOW";
   if (fightWeek) trainingLoad = "LOW";
   if (injury) trainingLoad = "LOW";
-  if (highFindings >= 2 && !fightWeek && !injury) trainingLoad = "HIGH";
+  if (highFindings >= 2 && !fightWeek && !injury && fuelState !== "bad") trainingLoad = "HIGH";
 
   const warnings: string[] = [];
+
   if (!v) warnings.push("No Vision loaded → you’re guessing. Run Sensei Vision.");
-  if (fightWeek) warnings.push("Fight-week mode: reduce GI risk, reduce injury risk, keep intensity controlled.");
-  if (injury) warnings.push("Injury constraint present: cut intensity before form breaks.");
+
+  if (fuelState === "bad") {
+    warnings.push(
+      "Fuel score is low: energy support and recovery are compromised. High output work will flatten pace and increase fatigue."
+    );
+  }
+
+  if (fuelState === "mid") {
+    warnings.push(
+      "Fuel score is moderate: nutrition support is inconsistent. Output may drop later in rounds if intensity climbs."
+    );
+  }
+
+  if (fuelState === "unknown") {
+    warnings.push(
+      "No Fuel data loaded: training decisions are being made without nutrition or recovery context."
+    );
+  }
+
+  if (fightWeek) {
+    warnings.push("Fight-week mode: reduce GI risk, reduce injury risk, keep intensity controlled.");
+  }
+
+  if (injury) {
+    warnings.push("Injury constraint present: cut intensity before form breaks.");
+  }
+
   warnings.push("If the directive fails under fatigue, reduce rounds and increase technical reps.");
 
   const nextStep: string[] = [];
+
+  if (fuelState === "bad") {
+    nextStep.push("Stabilise nutrition before increasing training intensity.");
+    nextStep.push("Avoid high-output sessions until Fuel improves.");
+  }
+
+  if (fuelState === "mid") {
+    nextStep.push("Keep load controlled until Fuel support is cleaner.");
+  }
+
   nextStep.push("Run a 20–40 minute technical block on the directive (reps > wars).");
   nextStep.push("Use the gym tab only as support after the camp directive is set.");
   nextStep.push("After session: log 1 clip and re-run Vision (proof of improvement).");
@@ -447,7 +534,7 @@ function buildChecklist(args: {
 
 function buildSystemStatus(
   vision: VisionAnalysis | null,
-  fuel: { score?: number; report?: string } | null,
+  fuel: FuelMemory | null,
   camp: SavedCamp | null
 ): SenseiSystemStatus {
   return {
@@ -633,13 +720,139 @@ async function loadRealDubaiGyms(): Promise<GymRow[]> {
   return (data ?? []) as GymRow[];
 }
 
+function mapSectionToApi(section: AskSectionId): "overview" | "training" | "nutrition" | "recovery" | "questions" {
+  if (section === "all") return "questions";
+  return section;
+}
+
+function buildSenseiContextString(args: {
+  profile: any;
+  focus: FocusKey;
+  baseArt: BaseArt;
+  styleTags: string;
+  constraints: string;
+  directive: CampDirective | null;
+  trainingFocus: TrainingFocus | null;
+  control: CampControl | null;
+  dailySession: DailySession | null;
+  gyms: GymCandidate[];
+  vision: VisionAnalysis | null;
+  fuel: FuelMemory | null;
+}) {
+  const {
+    profile,
+    focus,
+    baseArt,
+    styleTags,
+    constraints,
+    directive,
+    trainingFocus,
+    control,
+    dailySession,
+    gyms,
+    vision,
+    fuel,
+  } = args;
+
+  const topFinding =
+    vision?.findings?.find((f) => f.severity === "HIGH") ?? vision?.findings?.[0] ?? null;
+
+  const bestGym = gyms[0] ?? null;
+  const fuelState = deriveFuelState(fuel);
+
+  const parts: string[] = [
+    `Focus: ${focus}`,
+    `Base art: ${baseArt}`,
+    `Style tags: ${styleTags || "Not set"}`,
+    `Constraints: ${constraints || "None"}`,
+  ];
+
+  if (profile) {
+    parts.push(`Profile name: ${String((profile as any)?.name || "Unknown")}`);
+    parts.push(`Profile pace style: ${String((profile as any)?.paceStyle || "Unknown")}`);
+    parts.push(`Profile pressure preference: ${String((profile as any)?.pressurePreference || "Unknown")}`);
+    parts.push(`Profile strengths: ${String((profile as any)?.strengths || "None listed")}`);
+    parts.push(`Profile weaknesses: ${String((profile as any)?.weaknesses || "None listed")}`);
+    parts.push(`Fight date: ${String((profile as any)?.fightDate || "Not set")}`);
+    parts.push(`Current weight: ${String((profile as any)?.currentWeight ?? "Not set")}`);
+    parts.push(`Target weight: ${String((profile as any)?.targetWeight ?? "Not set")}`);
+  }
+
+  if (directive) {
+    parts.push(`Directive title: ${directive.title}`);
+    parts.push(`Directive source: ${directive.source}`);
+    parts.push(`Directive bullets: ${directive.bullets.join(" | ")}`);
+  }
+
+  if (trainingFocus) {
+    parts.push(`Primary training focus: ${trainingFocus.primary.join(" | ") || "None"}`);
+    parts.push(`Secondary training focus: ${trainingFocus.secondary.join(" | ") || "None"}`);
+    parts.push(`Avoid: ${trainingFocus.avoid.join(" | ") || "None"}`);
+  }
+
+  if (control) {
+    parts.push(`Training load: ${control.trainingLoad}`);
+    parts.push(`Warnings: ${control.warnings.join(" | ")}`);
+    parts.push(`Next steps: ${control.nextStep.join(" | ")}`);
+  }
+
+  if (dailySession) {
+    parts.push(`Daily session: ${dailySession.title}`);
+    parts.push(`Daily session goal: ${dailySession.goal}`);
+    parts.push(`Daily session blocks: ${dailySession.blocks.join(" | ")}`);
+  }
+
+  if (vision) {
+    parts.push(`Vision clip label: ${vision.clipLabel}`);
+    if (topFinding) {
+      parts.push(`Top Vision issue: ${topFinding.title}`);
+      parts.push(`Top Vision detail: ${topFinding.detail}`);
+      parts.push(`Top Vision severity: ${topFinding.severity}`);
+      parts.push(`Vision summary: ${topFinding.title} — ${topFinding.detail}`);
+    } else {
+      parts.push("Vision summary: Analysis loaded, but no findings were returned.");
+    }
+  } else {
+    parts.push("No recent Sensei Vision analysis.");
+  }
+
+  if (fuel) {
+    parts.push(`Fuel score: ${typeof fuel.score === "number" ? Math.round(fuel.score) : "Unknown"}`);
+    parts.push(`Fuel state: ${fuelState}`);
+    parts.push(`Fuel report: ${fuel.report || "No report"}`);
+  } else {
+    parts.push("No recent Fuel report.");
+  }
+
+  if (bestGym) {
+    parts.push(`Best gym match: ${bestGym.name} (${bestGym.compatibility}% match)`);
+    parts.push(`Best gym reason: ${bestGym.reason.join(" | ")}`);
+    parts.push(`Best gym best-for: ${bestGym.bestFor.join(" | ")}`);
+    parts.push(`Best gym watch-out: ${bestGym.watchOut.join(" | ")}`);
+  } else {
+    parts.push("No ranked gyms available.");
+  }
+
+  return parts.join("\n");
+}
+
+function formatSenseiDecision(data: SenseiDecisionResponse) {
+  return [
+    `Assessment: ${data.assessment}`,
+    `Impact: ${data.impact}`,
+    `Decision: ${data.decision}`,
+    `Next:`,
+    ...(data.next_steps || []).map((s) => `• ${s}`),
+  ].join("\n");
+}
+
 export default function SenseiClient() {
   const { profile } = useProfile();
 
   const savedCampRef = useRef<SavedCamp | null>(null);
   const realGymsRef = useRef<GymRow[]>([]);
   const lastVisionRef = useRef<VisionAnalysis | null>(null);
-  const lastFuelRef = useRef<{ score?: number; report?: string; followups_id?: string } | null>(null);
+  const lastFuelRef = useRef<FuelMemory | null>(null);
 
   const [focus, setFocus] = useState<FocusKey>("Pressure");
   const [baseArt, setBaseArt] = useState<BaseArt>("MMA");
@@ -665,7 +878,7 @@ export default function SenseiClient() {
     campLabel: "No saved camp yet.",
   });
 
-  const [followupsId] = useState<string | null>("camp_local");
+  const [followupsId, setFollowupsId] = useState<string | null>("camp_local");
   const [activeChatSection, setActiveChatSection] = useState<AskSectionId>("all");
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
@@ -675,7 +888,7 @@ export default function SenseiClient() {
       id: uid(),
       role: "system",
       section: "all",
-      text: "Sensei = camp control. Vision = analysis. Build camp, then ask about decisions.",
+      text: "Sensei = camp control. Vision = analysis. Fuel = recovery context. Build camp, then ask about decisions.",
       ts: Date.now(),
     },
   ]);
@@ -702,6 +915,10 @@ export default function SenseiClient() {
       setChecklist(saved.checklist ?? []);
       setStatusLabel("Ready");
       setBuildStage("DONE");
+    }
+
+    if (fuel?.followups_id) {
+      setFollowupsId(fuel.followups_id);
     }
 
     setSystemStatus(buildSystemStatus(vision, fuel, saved));
@@ -796,7 +1013,7 @@ export default function SenseiClient() {
         id: uid(),
         role: "system",
         section: "all",
-        text: "Reset complete. Run Vision then build camp.",
+        text: "Reset complete. Run Vision, load Fuel, then build camp.",
         ts: Date.now(),
       },
     ]);
@@ -816,6 +1033,10 @@ export default function SenseiClient() {
       lastFuelRef.current = fuel;
       setSystemStatus(buildSystemStatus(vision, fuel, savedCampRef.current));
 
+      if (fuel?.followups_id) {
+        setFollowupsId(fuel.followups_id);
+      }
+
       const weaknessTags = deriveWeaknessTags(vision);
 
       setBuildStage("SETTING_DIRECTIVE");
@@ -824,11 +1045,11 @@ export default function SenseiClient() {
 
       setBuildStage("BUILDING_TRAINING");
       await delay(500);
-      const t = buildTraining(vision, focus, constraints);
+      const t = buildTraining(vision, focus, constraints, fuel);
 
       setBuildStage("SETTING_CONTROL");
       await delay(420);
-      const c = buildControl(vision, constraints);
+      const c = buildControl(vision, constraints, fuel);
 
       const session = buildDailySession({
         focus,
@@ -861,6 +1082,8 @@ export default function SenseiClient() {
       setDailySession(session);
       setChecklist(tasks);
 
+      const fuelState = deriveFuelState(fuel);
+
       setChatMessages((prev) => [
         ...prev,
         {
@@ -868,7 +1091,7 @@ export default function SenseiClient() {
           role: "system",
           section: "all",
           text: vision
-            ? `Camp built from Vision: "${vision.clipLabel}". Focus=${focus}. Weakness tags=${weaknessTags.join(", ") || "none"}.`
+            ? `Camp built from Vision: "${vision.clipLabel}". Focus=${focus}. Fuel=${fuelState}. Weakness tags=${weaknessTags.join(", ") || "none"}.`
             : `Camp built WITHOUT Vision. Run Sensei Vision to stop guessing.`,
           ts: Date.now(),
         },
@@ -906,7 +1129,7 @@ export default function SenseiClient() {
   function onChatKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (!chatSending) onSendChat();
+      if (!chatSending) void onSendChat();
     }
   }
 
@@ -925,22 +1148,73 @@ export default function SenseiClient() {
 
     try {
       const vision = lastVisionRef.current;
-      const topFinding = vision?.findings?.find((f) => f.severity === "HIGH") ?? vision?.findings?.[0];
-      const best = gyms[0];
+      const fuel = lastFuelRef.current;
+      const mappedSection = mapSectionToApi(section);
 
-      const replyLines: string[] = [];
-      replyLines.push("Decision:");
-      if (!directive || !trainingFocus) replyLines.push("- Build camp first.");
-      else replyLines.push(`- Directive: ${directive.title}`);
+      const context = buildSenseiContextString({
+        profile,
+        focus,
+        baseArt,
+        styleTags,
+        constraints,
+        directive,
+        trainingFocus,
+        control,
+        dailySession,
+        gyms,
+        vision,
+        fuel,
+      });
 
-      replyLines.push("Next steps:");
-      if (topFinding) replyLines.push(`- Fix first: ${topFinding.title}`);
-      replyLines.push("- Keep it executable: reps → short rounds → re-test with Vision.");
-      if (best) replyLines.push(`- Gym support option: ${best.name} (${best.compatibility}% match).`);
+      const res = await fetch("/api/sensei", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          followups_id: followupsId || "camp_local",
+          section_id: mappedSection,
+          question: text,
+          context,
+        }),
+      });
+
+      const data = (await res.json()) as SenseiApiResponse;
+
+      if (!res.ok || !data || data.ok === false) {
+        const errorText =
+          data && "error" in data && typeof data.error === "string"
+            ? data.error
+            : "Sensei failed to answer.";
+        throw new Error(errorText);
+      }
+
+      if (!data.assessment) {
+        throw new Error("Sensei returned no usable response.");
+      }
+
+      const formatted = formatSenseiDecision(data);
 
       setChatMessages((prev) => [
         ...prev,
-        { id: uid(), role: "sensei", section, text: replyLines.join("\n"), ts: Date.now() },
+        {
+          id: uid(),
+          role: "sensei",
+          section,
+          text: formatted,
+          ts: Date.now(),
+        },
+      ]);
+    } catch (e: any) {
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: uid(),
+          role: "system",
+          section: "all",
+          text: `Sensei failed: ${e?.message ?? "unknown error"}`,
+          ts: Date.now(),
+        },
       ]);
     } finally {
       setChatSending(false);

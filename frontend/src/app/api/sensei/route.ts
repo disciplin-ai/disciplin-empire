@@ -1,211 +1,55 @@
-// src/app/api/sensei/route.ts
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { z } from "zod";
-
-// If you use Supabase auth like the old route, keep this.
-// If you DON'T want auth gating, delete the next 2 lines + the auth block below.
 import { supabaseServer } from "../../../lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
-
-/* =========================
-   Request Schemas
-========================= */
-
-const PlanSchema = z.object({
-  mode: z.literal("plan"),
-  week: z.string().optional().default("Today"),
-  context: z.string().min(8, "Missing context"),
-  followups_id: z.string().optional(),
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
 });
 
-const AskSchema = z.object({
-  mode: z.literal("ask"),
+/* =========================
+   Request Schema
+========================= */
+
+const ReqSchema = z.object({
   followups_id: z.string().min(1, "Missing followups_id"),
   section_id: z.enum(["overview", "training", "nutrition", "recovery", "questions"]),
   question: z.string().min(1, "Missing question"),
-  week: z.string().optional(),
   context: z.string().optional(),
 });
 
-const ReqSchema = z.union([PlanSchema, AskSchema]);
-
 /* =========================
-   Output JSON Schemas (OpenAI)
+   Strict JSON Schema
 ========================= */
 
-function planJsonSchema() {
-  // Strict schema ensures the model returns exactly what your UI can render.
-  return {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      followups_id: { type: "string" },
-      weekLabel: { type: "string" },
-      intensityTag: { type: "string", enum: ["LOW", "MODERATE", "HIGH", "MAX"] },
-
-      overview: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            title: { type: "string" },
-            bullets: { type: "array", items: { type: "string" } },
-          },
-          required: ["title", "bullets"],
-        },
-      },
-      training: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            title: { type: "string" },
-            bullets: { type: "array", items: { type: "string" } },
-          },
-          required: ["title", "bullets"],
-        },
-      },
-      nutrition: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            title: { type: "string" },
-            bullets: { type: "array", items: { type: "string" } },
-          },
-          required: ["title", "bullets"],
-        },
-      },
-      recovery: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            title: { type: "string" },
-            bullets: { type: "array", items: { type: "string" } },
-          },
-          required: ["title", "bullets"],
-        },
-      },
-      questions: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            title: { type: "string" },
-            bullets: { type: "array", items: { type: "string" } },
-          },
-          required: ["title", "bullets"],
-        },
-      },
+const DecisionSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    assessment: { type: "string" },
+    impact: { type: "string" },
+    decision: { type: "string" },
+    next_steps: {
+      type: "array",
+      items: { type: "string" },
+      minItems: 3,
+      maxItems: 3,
     },
-    required: ["followups_id", "weekLabel", "intensityTag", "overview", "training", "nutrition", "recovery", "questions"],
-  } as const;
-}
-
-function askJsonSchema() {
-  return {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      reply: { type: "string" },
-    },
-    required: ["reply"],
-  } as const;
-}
-
-/* =========================
-   Prompt Builders
-========================= */
-
-function systemRules() {
-  return [
-    "You are Sensei AI: a strict MMA coach.",
-    "Return STRICT JSON only (no markdown, no extra text).",
-    "Never use markdown symbols (no ##, no **).",
-    "Never repeat the user’s full context back to them.",
-    "Be decisive. No 'maybe'. No self-corrections.",
-
-    "",
-    "PLAN FORMAT:",
-    "- Output EXACTLY 5 sections: overview, training, nutrition, recovery, questions.",
-    "- Each section: 3–6 blocks, each block 1–3 bullets.",
-    "- Bullets must be concrete: numbers, timers, reps, limits, do/avoid.",
-    "- Include at least ONE bullet that starts with 'Cost:' in the overview section.",
-    "- Safety must appear in recovery.",
-
-    "",
-    "ASK FORMAT:",
-    "- Answer ONLY the question.",
-    "- 3–7 bullets max.",
-    "- Concrete steps; no essays; no restating the plan.",
-  ].join("\n");
-}
-
-function buildPlanPrompt(weekLabel: string, followups_id: string, context: string) {
-  return [
-    systemRules(),
-    "",
-    `WEEK_LABEL: ${weekLabel}`,
-    `FOLLOWUPS_ID: ${followups_id}`,
-    "",
-    "CONTEXT:",
-    context.trim(),
-    "",
-    "TASK:",
-    "- Produce the 5 sections for this session.",
-    "- Keep it tight and executable.",
-    "- Include 'Cost:' as instructed.",
-  ].join("\n");
-}
-
-function buildAskPrompt(args: {
-  followups_id: string;
-  section_id: string;
-  question: string;
-  weekLabel?: string;
-  context?: string;
-}) {
-  const { followups_id, section_id, question, weekLabel, context } = args;
-
-  return [
-    systemRules(),
-    "",
-    `FOLLOWUPS_ID: ${followups_id}`,
-    weekLabel ? `WEEK_LABEL: ${weekLabel}` : "",
-    context ? ["CONTEXT (brief):", context.trim(), ""].join("\n") : "",
-    `SECTION: ${section_id}`,
-    "",
-    "USER QUESTION:",
-    question.trim(),
-    "",
-    "TASK:",
-    "- Answer ONLY the question.",
-    "- 3–7 bullets max.",
-    "- Concrete, coach-like.",
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
+  },
+  required: ["assessment", "impact", "decision", "next_steps"],
+} as const;
 
 /* =========================
    Response Text Extractor
 ========================= */
 
 function getResponseText(resp: any): string {
-  const a = String(resp?.output_text ?? "").trim();
-  if (a) return a;
+  const direct = String(resp?.output_text ?? "").trim();
+  if (direct) return direct;
 
   const out = resp?.output;
   if (Array.isArray(out)) {
@@ -213,14 +57,177 @@ function getResponseText(resp: any): string {
       const content = item?.content;
       if (Array.isArray(content)) {
         for (const c of content) {
-          if (typeof c?.text === "string" && c.text.trim()) return c.text.trim();
-          const tt = c?.content?.[0]?.text;
-          if (typeof tt === "string" && tt.trim()) return tt.trim();
+          if (typeof c?.text === "string" && c.text.trim()) {
+            return c.text.trim();
+          }
+
+          const nested = c?.content;
+          if (Array.isArray(nested)) {
+            for (const n of nested) {
+              if (typeof n?.text === "string" && n.text.trim()) {
+                return n.text.trim();
+              }
+            }
+          }
         }
       }
     }
   }
+
   return "";
+}
+
+/* =========================
+   Prompt
+========================= */
+
+function systemPrompt() {
+  return `
+You are Sensei AI — a strict MMA coach inside Disciplin.
+
+You do NOT give fluffy advice.
+You do NOT motivate.
+You do NOT hedge.
+You make clear decisions.
+
+Your job:
+- detect what is wrong from the context
+- explain what it does physically
+- explain what happens because of it in training or a fight
+- make one clear decision
+- give exactly 3 direct next steps
+
+Rules:
+- be direct
+- no "maybe"
+- no generic tips
+- no repeating the user's question
+- no markdown
+- no labels like "ASSESSMENT:" or "IMPACT:"
+- return ONLY raw JSON matching the schema
+
+CRITICAL REASONING RULE:
+The response must follow this chain:
+
+1. Cause = what is wrong
+2. Effect = what it does physically
+3. Consequence = what happens in sparring, later rounds, exchanges, or a fight
+
+Do NOT stop at vague coach phrases.
+
+Bad phrases:
+- reinforces bad habits
+- not ideal
+- could improve
+- performance drops
+- recovery suffers
+- wrong habits
+- needs work
+
+Bad examples:
+- "This reinforces bad habits."
+- "This is not ideal for your style."
+- "Performance will drop."
+- "Recovery will suffer."
+
+Good examples:
+- "Your stance widens on entry, which slows your level change and makes your hips arrive late, so opponents will read the shot earlier and defend more easily."
+- "Your fuel support is too low for the current load, which increases fatigue and makes later-round pace flatter, so your pressure becomes easier to break."
+- "You are undertraining grappling reactions, which leaves your defensive timing untrained under fatigue, so stronger wrestlers will control you earlier in exchanges."
+
+Field requirements:
+- assessment = describe the cause clearly
+- impact = describe the physical effect and fight/training consequence clearly
+- decision = one main decision only
+- next_steps = exactly 3 short, direct actions
+
+Style rules:
+- assessment = max 1 sentence
+- impact = max 2 sentences
+- decision = max 1 sentence
+- next_steps = exactly 3 items, each short and executable
+
+If the question is about gyms:
+- explain why the chosen gym supports the directive
+- explain what physical quality the room improves
+- explain what failure happens in the wrong room
+
+If the question is about training:
+- identify the gap
+- explain what it does physically
+- explain how that costs the fighter
+
+If the question is about recovery or fuel:
+- explain what the lack of recovery or fuel does physically
+- explain how it affects later rounds, repeat effort, pace, reactions, or control
+`.trim();
+}
+
+/* =========================
+   Sanitizers / Validators
+========================= */
+
+function trimSentence(input: string, maxChars: number) {
+  const text = String(input || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars - 1).trim()}…`;
+}
+
+function trimStep(input: string, maxChars: number) {
+  const text = String(input || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars - 1).trim()}…`;
+}
+
+function containsWeakLanguage(text: string) {
+  const t = text.toLowerCase();
+  const weakPatterns = [
+    "bad habits",
+    "not ideal",
+    "could improve",
+    "needs work",
+    "performance drops",
+    "recovery suffers",
+    "wrong habits",
+    "should improve",
+  ];
+  return weakPatterns.some((p) => t.includes(p));
+}
+
+function strengthenAssessment(input: string) {
+  const text = trimSentence(input, 180);
+  if (!text || containsWeakLanguage(text)) {
+    return "The problem is not defined precisely enough. Re-run with a clearer cause.";
+  }
+  return text;
+}
+
+function strengthenImpact(input: string) {
+  const text = trimSentence(input, 260);
+  if (!text || containsWeakLanguage(text)) {
+    return "The physical effect and fight consequence are not defined clearly enough. Re-run with clearer cause → effect → consequence logic.";
+  }
+  return text;
+}
+
+function strengthenDecision(input: string) {
+  const text = trimSentence(input, 120);
+  if (!text) return "Set a clearer camp decision before proceeding.";
+  return text;
+}
+
+function strengthenSteps(steps: string[]) {
+  const cleaned = Array.isArray(steps)
+    ? steps.map((x) => trimStep(x, 52)).filter(Boolean).slice(0, 3)
+    : [];
+
+  while (cleaned.length < 3) {
+    cleaned.push("Reassess after next session");
+  }
+
+  return cleaned;
 }
 
 /* =========================
@@ -229,68 +236,42 @@ function getResponseText(resp: any): string {
 
 export async function POST(req: Request) {
   try {
-    // OPTIONAL AUTH (recommended)
-    // If you don't want auth, remove this entire block.
     const sb = await supabaseServer();
     const { data: auth } = await sb.auth.getUser();
+
     if (!auth?.user) {
-      return NextResponse.json({ ok: false, error: "Not authenticated." }, { status: 401 });
+      return NextResponse.json(
+        { ok: false, error: "Not authenticated." },
+        { status: 401 }
+      );
     }
 
     const body = await req.json().catch(() => null);
     const parsed = ReqSchema.safeParse(body);
+
     if (!parsed.success) {
-      return NextResponse.json({ ok: false, error: parsed.error.message }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: parsed.error.message },
+        { status: 400 }
+      );
     }
 
-    // -------------------------
-    // ASK
-    // -------------------------
-    if (parsed.data.mode === "ask") {
-      const prompt = buildAskPrompt({
-        followups_id: parsed.data.followups_id,
-        section_id: parsed.data.section_id,
-        question: parsed.data.question,
-        weekLabel: parsed.data.week,
-        context: parsed.data.context,
-      });
+    const { question, context, section_id, followups_id } = parsed.data;
 
-      const resp = await openai.responses.create({
-        model: "gpt-5.1",
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: prompt }],
-          },
-        ],
-        text: {
-          format: {
-            type: "json_schema",
-            name: "sensei_ask",
-            strict: true,
-            schema: askJsonSchema(),
-          },
-        },
-      } as any);
+    const prompt = `
+${systemPrompt()}
 
-      const raw = getResponseText(resp);
-      if (!raw) return NextResponse.json({ ok: false, error: "Sensei returned empty output." }, { status: 500 });
+FOLLOWUPS_ID: ${followups_id}
+SECTION: ${section_id}
 
-      const out = JSON.parse(raw) as { reply: string };
+CONTEXT:
+${(context || "No context provided.").trim()}
 
-      const reply = String(out.reply ?? "").trim();
-      return NextResponse.json({ ok: true, reply });
-    }
+QUESTION:
+${question.trim()}
 
-    // -------------------------
-    // PLAN
-    // -------------------------
-    const weekLabel = (parsed.data.week || "Today").trim();
-    const followups_id = parsed.data.followups_id || crypto.randomUUID();
-    const context = parsed.data.context;
-
-    const prompt = buildPlanPrompt(weekLabel, followups_id, context);
+Return the decision JSON now.
+`.trim();
 
     const resp = await openai.responses.create({
       model: "gpt-5.1",
@@ -304,25 +285,57 @@ export async function POST(req: Request) {
       text: {
         format: {
           type: "json_schema",
-          name: "sensei_plan",
+          name: "sensei_decision",
           strict: true,
-          schema: planJsonSchema(),
+          schema: DecisionSchema,
         },
       },
     } as any);
 
     const raw = getResponseText(resp);
-    if (!raw) return NextResponse.json({ ok: false, error: "Sensei returned empty output." }, { status: 500 });
 
-    const out = JSON.parse(raw) as any;
+    if (!raw) {
+      console.error("[sensei] empty output from model", JSON.stringify(resp, null, 2));
+      return NextResponse.json(
+        { ok: false, error: "Sensei returned empty output." },
+        { status: 500 }
+      );
+    }
 
-    out.followups_id = followups_id;
-    out.weekLabel = weekLabel;
-    if (!out.intensityTag) out.intensityTag = "MODERATE";
+    let parsedOutput: {
+      assessment: string;
+      impact: string;
+      decision: string;
+      next_steps: string[];
+    };
 
-    return NextResponse.json({ ok: true, ...out });
+    try {
+      parsedOutput = JSON.parse(raw);
+    } catch (parseErr) {
+      console.error("[sensei] failed to parse JSON:", raw);
+      return NextResponse.json(
+        { ok: false, error: "Sensei returned invalid JSON." },
+        { status: 500 }
+      );
+    }
+
+    const assessment = strengthenAssessment(parsedOutput.assessment);
+    const impact = strengthenImpact(parsedOutput.impact);
+    const decision = strengthenDecision(parsedOutput.decision);
+    const next_steps = strengthenSteps(parsedOutput.next_steps);
+
+    return NextResponse.json({
+      ok: true,
+      assessment,
+      impact,
+      decision,
+      next_steps,
+    });
   } catch (err: any) {
     console.error("[sensei] crashed:", err);
-    return NextResponse.json({ ok: false, error: "Sensei backend crashed." }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: "Sensei backend crashed." },
+      { status: 500 }
+    );
   }
 }

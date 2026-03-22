@@ -1,11 +1,10 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React from "react";
 import Link from "next/link";
 
-/* ========================= TYPES ========================= */
-
 export type FocusKey = "Pressure" | "Speed" | "Power" | "Recovery" | "Mixed";
+
 export type BaseArt =
   | "MMA"
   | "Wrestling"
@@ -15,6 +14,16 @@ export type BaseArt =
   | "BJJ"
   | "Judo"
   | "Sambo";
+
+export type BuildStage =
+  | "IDLE"
+  | "READING_CONTEXT"
+  | "SETTING_DIRECTIVE"
+  | "BUILDING_TRAINING"
+  | "SETTING_CONTROL"
+  | "RANKING_GYMS"
+  | "DONE"
+  | "ERROR";
 
 export type CampDirective = {
   title: string;
@@ -31,13 +40,13 @@ export type TrainingFocus = {
 export type GymCandidate = {
   id: string;
   name: string;
-  location?: string;
+  location: string;
   compatibility: number;
   reason: string[];
   bestFor: string[];
   watchOut: string[];
   href?: string;
-  verified?: boolean;
+  verified: boolean;
 };
 
 export type CampControl = {
@@ -45,36 +54,6 @@ export type CampControl = {
   warnings: string[];
   nextStep: string[];
 };
-
-export type SenseiSystemStatus = {
-  visionConnected: boolean;
-  visionLabel: string;
-  fuelConnected: boolean;
-  fuelLabel: string;
-  campSaved: boolean;
-  campLabel: string;
-};
-
-export type AskSectionId = "all" | "directive" | "training" | "control" | "gyms";
-export type OutputTabId = "directive" | "training" | "control" | "execution" | "gyms";
-
-export type ChatMessage = {
-  id: string;
-  role: "user" | "sensei" | "system";
-  section: AskSectionId;
-  text: string;
-  ts: number;
-};
-
-export type BuildStage =
-  | "IDLE"
-  | "READING_CONTEXT"
-  | "SETTING_DIRECTIVE"
-  | "BUILDING_TRAINING"
-  | "SETTING_CONTROL"
-  | "RANKING_GYMS"
-  | "DONE"
-  | "ERROR";
 
 export type DailySession = {
   title: string;
@@ -90,17 +69,144 @@ export type ChecklistItem = {
   done: boolean;
 };
 
-/* ========================= UI HELPERS ========================= */
+export type SenseiSystemStatus = {
+  visionConnected: boolean;
+  visionLabel: string;
+  fuelConnected: boolean;
+  fuelLabel: string;
+  campSaved: boolean;
+  campLabel: string;
+};
+
+export type AskSectionId =
+  | "all"
+  | "overview"
+  | "training"
+  | "nutrition"
+  | "recovery"
+  | "questions";
+
+export type ChatMessage = {
+  id: string;
+  role: "system" | "user" | "sensei";
+  section: AskSectionId;
+  text: string;
+  ts: number;
+};
+
+type SenseiScreenProps = {
+  focus: FocusKey;
+  setFocus: (value: FocusKey) => void;
+  baseArt: BaseArt;
+  setBaseArt: (value: BaseArt) => void;
+  styleTags: string;
+  setStyleTags: (value: string) => void;
+  constraints: string;
+  setConstraints: (value: string) => void;
+
+  directive: CampDirective | null;
+  trainingFocus: TrainingFocus | null;
+  gyms: GymCandidate[];
+  control: CampControl | null;
+  systemStatus: SenseiSystemStatus;
+  dailySession: DailySession | null;
+  checklist: ChecklistItem[];
+
+  onToggleChecklistItem: (id: string) => void;
+  onBuildCamp: () => void;
+  onReset: () => void;
+  onOpenVision: () => void;
+  onOpenFuel: () => void;
+
+  followupsId: string | null;
+  activeChatSection: AskSectionId;
+  setActiveChatSection: (value: AskSectionId) => void;
+  chatInput: string;
+  setChatInput: (value: string) => void;
+  chatSending: boolean;
+  chatMessages: ChatMessage[];
+  onSendChat: () => void;
+  onChatKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+
+  busy: boolean;
+  buildStage: BuildStage;
+  statusLabel: "Idle" | "Building" | "Ready" | "Error";
+  statusTone: "neutral" | "good" | "warn" | "bad";
+};
+
+const FOCUS_OPTIONS: FocusKey[] = [
+  "Pressure",
+  "Speed",
+  "Power",
+  "Recovery",
+  "Mixed",
+];
+
+const BASE_ART_OPTIONS: BaseArt[] = [
+  "MMA",
+  "Wrestling",
+  "Boxing",
+  "Kickboxing",
+  "Muay Thai",
+  "BJJ",
+  "Judo",
+  "Sambo",
+];
+
+const CHAT_SECTIONS: AskSectionId[] = [
+  "all",
+  "overview",
+  "training",
+  "nutrition",
+  "recovery",
+  "questions",
+];
+
+const CHAT_SECTION_LABELS: Record<AskSectionId, string> = {
+  all: "All",
+  overview: "Overview",
+  training: "Training",
+  nutrition: "Nutrition",
+  recovery: "Recovery",
+  questions: "Decisions",
+};
 
 function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
-function Badge({
+function SectionCard({
+  title,
+  subtitle,
+  right,
   children,
+}: {
+  title: string;
+  subtitle?: string;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-3xl border border-slate-800/60 bg-slate-950/25 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] backdrop-blur">
+      <div className="flex items-start justify-between gap-4 border-b border-slate-800/50 px-4 py-4 sm:px-5">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-slate-50">{title}</div>
+          {subtitle ? (
+            <div className="mt-1 text-xs text-slate-300/70">{subtitle}</div>
+          ) : null}
+        </div>
+        {right ? <div className="shrink-0">{right}</div> : null}
+      </div>
+      <div className="px-4 py-4 sm:px-5 sm:py-5">{children}</div>
+    </section>
+  );
+}
+
+function Badge({
+  label,
   tone = "neutral",
 }: {
-  children: React.ReactNode;
+  label: string;
   tone?: "neutral" | "good" | "warn" | "bad";
 }) {
   const cls =
@@ -113,865 +219,614 @@ function Badge({
       : "border-slate-700/60 bg-slate-900/30 text-slate-200/90";
 
   return (
-    <span className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-xs", cls)}>
-      {children}
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border px-2.5 py-1 text-xs",
+        cls
+      )}
+    >
+      {label}
     </span>
   );
 }
 
-function Card({
-  title,
-  sub,
-  right,
-  children,
+function PillButton({
+  active,
+  label,
+  onClick,
 }: {
-  title: string;
-  sub?: string;
-  right?: React.ReactNode;
-  children: React.ReactNode;
+  active: boolean;
+  label: string;
+  onClick: () => void;
 }) {
   return (
-    <section className="rounded-3xl border border-slate-800/60 bg-slate-950/25 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] backdrop-blur">
-      <div className="flex items-start justify-between gap-3 border-b border-slate-800/40 px-5 py-4">
-        <div>
-          <div className="text-sm font-semibold text-slate-50">{title}</div>
-          {sub ? <div className="mt-1 text-xs text-slate-300/70">{sub}</div> : null}
-        </div>
-        {right}
-      </div>
-      <div className="px-5 py-5">{children}</div>
-    </section>
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-full border px-3 py-2 text-xs sm:text-sm transition",
+        active
+          ? "border-emerald-400/60 bg-emerald-500/15 text-emerald-100"
+          : "border-slate-700/80 bg-slate-950/40 text-slate-200 hover:bg-slate-900/50"
+      )}
+    >
+      {label}
+    </button>
   );
 }
 
-function Bullets({ items }: { items: string[] }) {
+function MiniStat({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-3">
+      <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">
+        {label}
+      </div>
+      <div className="mt-2 text-sm font-semibold text-slate-50">{value}</div>
+    </div>
+  );
+}
+
+function BulletList({ items }: { items: string[] }) {
   return (
     <ul className="space-y-2 text-sm text-slate-100/90">
-      {items.map((b, i) => (
+      {items.map((item, i) => (
         <li key={i} className="flex gap-2">
           <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-300/80" />
-          <span>{b}</span>
+          <span>{item}</span>
         </li>
       ))}
     </ul>
   );
 }
 
-function loadTone(t: CampControl["trainingLoad"]): "good" | "warn" | "bad" {
-  if (t === "LOW") return "good";
-  if (t === "MODERATE") return "warn";
-  return "bad";
-}
-
-function stageProgress(stage: BuildStage): number {
-  switch (stage) {
-    case "READING_CONTEXT":
-      return 18;
-    case "SETTING_DIRECTIVE":
-      return 36;
-    case "BUILDING_TRAINING":
-      return 58;
-    case "SETTING_CONTROL":
-      return 78;
-    case "RANKING_GYMS":
-      return 92;
-    case "DONE":
-      return 100;
-    case "ERROR":
-      return 100;
-    case "IDLE":
-    default:
-      return 0;
-  }
-}
-
-function stageLabel(stage: BuildStage): string {
-  switch (stage) {
-    case "READING_CONTEXT":
-      return "Reading context";
-    case "SETTING_DIRECTIVE":
-      return "Setting directive";
-    case "BUILDING_TRAINING":
-      return "Building training";
-    case "SETTING_CONTROL":
-      return "Setting control";
-    case "RANKING_GYMS":
-      return "Ranking gym support";
-    case "DONE":
-      return "Ready";
-    case "ERROR":
-      return "Error";
-    case "IDLE":
-    default:
-      return "Idle";
-  }
-}
-
-function BuildRitual({ stage }: { stage: BuildStage }) {
-  const steps: Array<{ key: BuildStage; label: string }> = [
-    { key: "READING_CONTEXT", label: "Reading latest Vision + profile context" },
-    { key: "SETTING_DIRECTIVE", label: "Locking weekly directive" },
-    { key: "BUILDING_TRAINING", label: "Mapping training priorities" },
-    { key: "SETTING_CONTROL", label: "Setting load, warnings, next step" },
-    { key: "RANKING_GYMS", label: "Ranking real gym support from Supabase" },
-  ];
-
-  const currentIndex = steps.findIndex((s) => s.key === stage);
-
-  return (
-    <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-5">
-      <div className="text-[11px] tracking-[0.28em] uppercase text-emerald-300/80">Building camp</div>
-      <div className="mt-2 text-sm font-semibold text-slate-50">{stageLabel(stage)}…</div>
-
-      <div className="mt-4 h-2 w-full overflow-hidden rounded-full border border-slate-800/60 bg-slate-950/60">
-        <div
-          className="h-full rounded-full bg-emerald-400/80 transition-all duration-500"
-          style={{ width: `${stageProgress(stage)}%` }}
-        />
-      </div>
-
-      <div className="mt-4 space-y-2">
-        {steps.map((step, idx) => {
-          const done = idx < currentIndex;
-          const active = idx === currentIndex;
-
-          return (
-            <div
-              key={step.key}
-              className={cn(
-                "flex items-center gap-3 rounded-xl border px-3 py-2 text-sm transition",
-                done
-                  ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-100"
-                  : active
-                  ? "border-amber-500/20 bg-amber-500/5 text-amber-100"
-                  : "border-slate-800/60 bg-slate-950/30 text-slate-400"
-              )}
-            >
-              <span
-                className={cn(
-                  "inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold",
-                  done
-                    ? "bg-emerald-400/20 text-emerald-200"
-                    : active
-                    ? "bg-amber-400/20 text-amber-200 animate-pulse"
-                    : "bg-slate-800 text-slate-400"
-                )}
-              >
-                {done ? "✓" : idx + 1}
-              </span>
-              <span>{step.label}</span>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="mt-3 text-xs text-slate-300/60">
-        Sensei builds the camp first. Gyms are ranked after the directive is set.
-      </div>
-    </div>
-  );
-}
-
-function CompactGymCard({
-  gym,
-  defaultOpen = false,
+function StatusRow({
+  label,
+  value,
+  active,
 }: {
-  gym: GymCandidate;
-  defaultOpen?: boolean;
+  label: string;
+  value: string;
+  active: boolean;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
-
   return (
-    <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-start justify-between gap-3 px-4 py-4 text-left"
-      >
-        <div>
-          <div className="text-sm font-semibold text-slate-50">{gym.name}</div>
-          <div className="mt-1 text-xs text-slate-300/70">{gym.location ?? "Location not set"}</div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {gym.verified ? <Badge tone="good">Verified</Badge> : null}
-          <Badge tone={gym.compatibility >= 90 ? "good" : gym.compatibility >= 80 ? "warn" : "neutral"}>
-            {gym.compatibility}% match
-          </Badge>
-          <span className="text-xs text-slate-400">{open ? "−" : "+"}</span>
-        </div>
-      </button>
-
-      {open ? (
-        <div className="border-t border-slate-800/50 px-4 py-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Reason</div>
-              <div className="mt-2">
-                <Bullets items={gym.reason} />
-              </div>
-            </div>
-
-            <div>
-              <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Best for</div>
-              <div className="mt-2">
-                <Bullets items={gym.bestFor} />
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-3 rounded-xl border border-slate-800/60 bg-slate-950/30 p-3">
-            <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Watch out</div>
-            <div className="mt-2">
-              <Bullets items={gym.watchOut} />
-            </div>
-          </div>
-
-          {gym.href ? (
-            <div className="mt-3">
-              <Link className="text-xs text-emerald-200 underline" href={gym.href}>
-                Open gym profile →
-              </Link>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+    <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm font-medium text-slate-50">{label}</div>
+        <Badge label={active ? "Connected" : "Missing"} tone={active ? "good" : "warn"} />
+      </div>
+      <div className="mt-2 text-xs text-slate-300/75">{value}</div>
     </div>
   );
 }
 
-/* ========================= COMPONENT ========================= */
-
-export default function SenseiScreen(props: {
-  focus: FocusKey;
-  setFocus: (v: FocusKey) => void;
-
-  baseArt: BaseArt;
-  setBaseArt: (v: BaseArt) => void;
-
-  styleTags: string;
-  setStyleTags: (v: string) => void;
-  constraints: string;
-  setConstraints: (v: string) => void;
-
-  directive: CampDirective | null;
-  trainingFocus: TrainingFocus | null;
-  gyms: GymCandidate[];
-  control: CampControl | null;
-  systemStatus: SenseiSystemStatus;
-
-  dailySession: DailySession | null;
-  checklist: ChecklistItem[];
-  onToggleChecklistItem: (id: string) => void;
-
-  onBuildCamp: () => void;
-  onReset: () => void;
-  onOpenVision: () => void;
-  onOpenFuel: () => void;
-
-  followupsId?: string | null;
-  activeChatSection: AskSectionId;
-  setActiveChatSection: (v: AskSectionId) => void;
-  chatInput: string;
-  setChatInput: (v: string) => void;
-  chatSending: boolean;
-  chatMessages: ChatMessage[];
-  onSendChat: () => void;
-  onChatKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-
-  busy: boolean;
-  buildStage: BuildStage;
-  statusLabel: string;
-  statusTone: "neutral" | "good" | "warn" | "bad";
-}) {
-  const [activeOutputTab, setActiveOutputTab] = useState<OutputTabId>("directive");
-
-  const focusOptions: Array<{ k: FocusKey; desc: string }> = [
-    { k: "Pressure", desc: "pace, wall, chain attacks, grind" },
-    { k: "Speed", desc: "sharp entries, fast hands, reset discipline" },
-    { k: "Power", desc: "explosive actions, low volume, perfect form" },
-    { k: "Recovery", desc: "low impact, tissue quality, safe output" },
-    { k: "Mixed", desc: "balanced priorities, adapt session-by-session" },
-  ];
-
-  const outputTabs: Array<{ id: OutputTabId; label: string }> = [
-    { id: "directive", label: "Directive" },
-    { id: "training", label: "Training" },
-    { id: "control", label: "Control" },
-    { id: "execution", label: "Execution" },
-    { id: "gyms", label: "Gyms" },
-  ];
-
-  const arts: Array<BaseArt> = ["MMA", "Wrestling", "Boxing", "Kickboxing", "Muay Thai", "BJJ", "Judo", "Sambo"];
-
-  const hasCamp = !!props.directive && !!props.trainingFocus && !!props.control;
-
-  const chatTabs: Array<{ id: AskSectionId; label: string }> = [
-    { id: "all", label: "All" },
-    { id: "directive", label: "Directive" },
-    { id: "training", label: "Training" },
-    { id: "control", label: "Control" },
-    { id: "gyms", label: "Gyms" },
-  ];
-
-  const filteredMessages =
-    props.activeChatSection === "all"
-      ? props.chatMessages
-      : props.chatMessages.filter((m) => m.section === props.activeChatSection);
-
-  const topGym = useMemo(() => props.gyms[0] ?? null, [props.gyms]);
-  const secondaryGyms = useMemo(() => props.gyms.slice(1, 3), [props.gyms]);
-
-  const campSummary = useMemo(() => {
-    return {
-      directiveTitle: props.directive?.title ?? "No directive yet",
-      load: props.control?.trainingLoad ?? "—",
-      primaryFocus: props.trainingFocus?.primary?.[0] ?? "Build camp first",
-      nextStep: props.control?.nextStep?.[0] ?? "Run Vision, then build camp",
-    };
-  }, [props.directive, props.trainingFocus, props.control]);
-
-  const completedCount = props.checklist.filter((x) => x.done).length;
+function ChatBubble({ msg }: { msg: ChatMessage }) {
+  const isUser = msg.role === "user";
+  const isSensei = msg.role === "sensei";
 
   return (
-    <main className="min-h-[calc(100vh-72px)] pt-24 pb-10">
-      <div className="mx-auto max-w-6xl px-4 md:px-6">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Badge tone="good">SENSEI</Badge>
-            <span className="text-sm text-slate-200/80">Camp control system. Build the week. Keep it executable.</span>
+    <div
+      className={cn(
+        "w-[96%] rounded-2xl border px-3 py-3 text-[13px] leading-6 whitespace-pre-wrap sm:w-[94%] sm:px-4 sm:text-sm sm:leading-6",
+        isUser
+          ? "ml-auto border-emerald-500/25 bg-emerald-500/10 text-emerald-50"
+          : isSensei
+          ? "border-slate-700/70 bg-slate-900/50 text-slate-100"
+          : "border-slate-800/70 bg-slate-950/30 text-slate-300"
+      )}
+    >
+      <div className="mb-1.5 text-[10px] uppercase tracking-[0.2em] text-slate-400/70">
+        {msg.role === "user" ? "You" : msg.role === "sensei" ? "Sensei" : "System"}
+      </div>
+      <div className="break-words">{msg.text}</div>
+    </div>
+  );
+}
+
+function sortMessagesByTime(messages: ChatMessage[]) {
+  return [...messages].sort((a, b) => a.ts - b.ts);
+}
+
+export default function SenseiScreen({
+  focus,
+  setFocus,
+  baseArt,
+  setBaseArt,
+  styleTags,
+  setStyleTags,
+  constraints,
+  setConstraints,
+  directive,
+  trainingFocus,
+  gyms,
+  control,
+  systemStatus,
+  dailySession,
+  checklist,
+  onToggleChecklistItem,
+  onBuildCamp,
+  onReset,
+  onOpenVision,
+  onOpenFuel,
+  followupsId,
+  activeChatSection,
+  setActiveChatSection,
+  chatInput,
+  setChatInput,
+  chatSending,
+  chatMessages,
+  onSendChat,
+  onChatKeyDown,
+  busy,
+  buildStage,
+  statusLabel,
+  statusTone,
+}: SenseiScreenProps) {
+  const visibleMessages =
+    activeChatSection === "all"
+      ? sortMessagesByTime(chatMessages)
+      : sortMessagesByTime(
+          chatMessages.filter(
+            (msg) => msg.role === "system" || msg.section === activeChatSection
+          )
+        );
+
+  return (
+    <main className="min-h-[calc(100vh-72px)] pt-20 pb-8 sm:pt-24 sm:pb-10">
+      <div className="mx-auto max-w-7xl px-3 sm:px-4 md:px-6">
+        <div className="mb-5 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="text-[11px] font-semibold tracking-[0.32em] text-emerald-300">
+              SENSEI
+            </div>
+            <h1 className="mt-2 text-xl font-semibold text-white sm:text-2xl">
+              Camp control
+            </h1>
+            <p className="mt-1 text-xs text-slate-300/70 sm:text-sm">
+              Build a directive, stress-test the week, then ask Sensei for decisions.
+            </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <Badge tone={props.statusTone}>{props.statusLabel}</Badge>
-            {hasCamp ? <Badge tone="neutral">Camp built</Badge> : <Badge tone="neutral">No camp</Badge>}
-            <Link
-              href="/dashboard"
-              className="rounded-full border border-slate-700/70 bg-slate-950/30 px-3 py-1.5 text-xs text-slate-200/80 hover:bg-slate-900/40"
-            >
-              Dashboard
-            </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge label={statusLabel} tone={statusTone} />
+            <Badge label={buildStage} tone={busy ? "warn" : "neutral"} />
+            {followupsId ? <Badge label={`ID: ${followupsId}`} tone="neutral" /> : null}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          <div className="lg:col-span-5 space-y-6">
-            <Card
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
+          <div className="space-y-5 xl:col-span-4">
+            <SectionCard
               title="Camp inputs"
-              sub="Build the next 7 days from your profile, latest Vision context, and constraints."
-              right={<Badge tone="neutral">Camp builder</Badge>}
-            >
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-3">
-                  {focusOptions.map((f) => {
-                    const active = props.focus === f.k;
-                    return (
-                      <button
-                        key={f.k}
-                        type="button"
-                        onClick={() => props.setFocus(f.k)}
-                        className={cn(
-                          "text-left rounded-2xl border px-4 py-3 transition will-change-transform",
-                          "hover:-translate-y-[1px] hover:shadow-[0_10px_30px_-18px_rgba(16,185,129,0.45)]",
-                          active
-                            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-100"
-                            : "border-slate-800/70 bg-slate-950/30 text-slate-100 hover:bg-slate-900/30"
-                        )}
-                      >
-                        <div className="text-sm font-semibold">{f.k}</div>
-                        <div className="mt-1 text-xs text-slate-300/70">{f.desc}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div>
-                  <label className="text-xs text-slate-300/70">Base art</label>
-                  <select
-                    value={props.baseArt}
-                    onChange={(e) => props.setBaseArt(e.target.value as BaseArt)}
-                    className="mt-2 w-full rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
-                  >
-                    {arts.map((a) => (
-                      <option key={a} value={a}>
-                        {a}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs text-slate-300/70">Style tags</label>
-                  <input
-                    value={props.styleTags}
-                    onChange={(e) => props.setStyleTags(e.target.value)}
-                    placeholder='e.g. "pressure wrestler, forward pressure, short-range boxing"'
-                    className="mt-2 w-full rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs text-slate-300/70">Constraints</label>
-                  <textarea
-                    value={props.constraints}
-                    onChange={(e) => props.setConstraints(e.target.value)}
-                    rows={3}
-                    placeholder='e.g. "knee sensitive, 60 min, no partner today"'
-                    className="mt-2 w-full resize-none rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
-                  />
-                </div>
-
-                <div className="flex gap-3 pt-1">
+              subtitle="Set the camp lens before asking for decisions."
+              right={
+                <div className="flex gap-2">
                   <button
-                    onClick={props.onBuildCamp}
-                    disabled={props.busy}
-                    className={cn(
-                      "rounded-full px-5 py-3 text-sm font-medium transition",
-                      !props.busy
-                        ? "bg-emerald-400/95 text-slate-950 hover:bg-emerald-300 shadow-[0_0_45px_rgba(52,211,153,0.22)]"
-                        : "bg-slate-800/60 text-slate-400 cursor-not-allowed"
-                    )}
+                    type="button"
+                    onClick={onBuildCamp}
+                    disabled={busy}
+                    className="rounded-2xl bg-emerald-400/95 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-300 disabled:opacity-60"
                   >
-                    {props.busy ? `${stageLabel(props.buildStage)}…` : "Build camp"}
+                    {busy ? "Building..." : "Build camp"}
                   </button>
-
                   <button
-                    onClick={props.onReset}
-                    disabled={props.busy}
-                    className="rounded-full border border-slate-700/70 bg-slate-950/30 px-5 py-3 text-sm font-medium text-slate-100 hover:bg-slate-900/40 disabled:opacity-60"
+                    type="button"
+                    onClick={onReset}
+                    className="rounded-2xl border border-slate-700/70 bg-slate-950/30 px-4 py-2 text-sm text-slate-200 hover:bg-slate-900/40"
                   >
                     Reset
                   </button>
                 </div>
-
-                <div className="text-xs text-slate-300/60">
-                  The camp is primary. Gyms are support inside their own tab.
-                </div>
-              </div>
-            </Card>
-
-            <Card
-              title="System status"
-              sub="Sensei reads recent tool context and remembers the latest camp."
-              right={<Badge tone="neutral">AI status</Badge>}
+              }
             >
-              <div className="grid gap-3">
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-xs uppercase tracking-[0.22em] text-slate-400/70">Vision</div>
-                      <div className="mt-1 text-sm text-slate-100">{props.systemStatus.visionLabel}</div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Badge tone={props.systemStatus.visionConnected ? "good" : "warn"}>
-                        {props.systemStatus.visionConnected ? "Connected" : "Missing"}
-                      </Badge>
-                      <button
-                        onClick={props.onOpenVision}
-                        className="rounded-full border border-slate-700/70 bg-slate-950/30 px-3 py-1.5 text-xs text-slate-200/80 hover:bg-slate-900/40"
-                      >
-                        Open Vision →
-                      </button>
-                    </div>
+              <div className="space-y-5">
+                <div>
+                  <div className="mb-2 text-xs font-medium text-slate-300">Focus</div>
+                  <div className="flex flex-wrap gap-2">
+                    {FOCUS_OPTIONS.map((item) => (
+                      <PillButton
+                        key={item}
+                        active={focus === item}
+                        label={item}
+                        onClick={() => setFocus(item)}
+                      />
+                    ))}
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-xs uppercase tracking-[0.22em] text-slate-400/70">Fuel</div>
-                      <div className="mt-1 text-sm text-slate-100">{props.systemStatus.fuelLabel}</div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Badge tone={props.systemStatus.fuelConnected ? "good" : "warn"}>
-                        {props.systemStatus.fuelConnected ? "Connected" : "Missing"}
-                      </Badge>
-                      <button
-                        onClick={props.onOpenFuel}
-                        className="rounded-full border border-slate-700/70 bg-slate-950/30 px-3 py-1.5 text-xs text-slate-200/80 hover:bg-slate-900/40"
-                      >
-                        Open Fuel →
-                      </button>
-                    </div>
+                <div>
+                  <div className="mb-2 text-xs font-medium text-slate-300">Base art</div>
+                  <div className="flex flex-wrap gap-2">
+                    {BASE_ART_OPTIONS.map((item) => (
+                      <PillButton
+                        key={item}
+                        active={baseArt === item}
+                        label={item}
+                        onClick={() => setBaseArt(item)}
+                      />
+                    ))}
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-xs uppercase tracking-[0.22em] text-slate-400/70">Camp memory</div>
-                      <div className="mt-1 text-sm text-slate-100">{props.systemStatus.campLabel}</div>
-                    </div>
-                    <Badge tone={props.systemStatus.campSaved ? "good" : "warn"}>
-                      {props.systemStatus.campSaved ? "Saved" : "Not saved"}
-                    </Badge>
+                <label className="block">
+                  <div className="mb-2 text-xs font-medium text-slate-300">
+                    Style tags
                   </div>
+                  <textarea
+                    value={styleTags}
+                    onChange={(e) => setStyleTags(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
+                    placeholder="pressure wrestler, forward pressure"
+                  />
+                </label>
+
+                <label className="block">
+                  <div className="mb-2 text-xs font-medium text-slate-300">
+                    Constraints
+                  </div>
+                  <textarea
+                    value={constraints}
+                    onChange={(e) => setConstraints(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
+                    placeholder="60 min, no partner today"
+                  />
+                </label>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 xl:grid-cols-1">
+                  <button
+                    type="button"
+                    onClick={onOpenVision}
+                    className="rounded-2xl border border-slate-800/60 bg-slate-950/25 px-4 py-3 text-left text-sm text-slate-100 hover:bg-slate-900/35"
+                  >
+                    Open Sensei Vision
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onOpenFuel}
+                    className="rounded-2xl border border-slate-800/60 bg-slate-950/25 px-4 py-3 text-left text-sm text-slate-100 hover:bg-slate-900/35"
+                  >
+                    Open Fuel AI
+                  </button>
+                  <Link
+                    href="/gyms"
+                    className="rounded-2xl border border-slate-800/60 bg-slate-950/25 px-4 py-3 text-left text-sm text-slate-100 hover:bg-slate-900/35"
+                  >
+                    Open gyms
+                  </Link>
                 </div>
               </div>
-            </Card>
+            </SectionCard>
+
+            <SectionCard
+              title="System status"
+              subtitle="Sensei should know what it is working from."
+            >
+              <div className="space-y-3">
+                <StatusRow
+                  label="Sensei Vision"
+                  value={systemStatus.visionLabel}
+                  active={systemStatus.visionConnected}
+                />
+                <StatusRow
+                  label="Fuel AI"
+                  value={systemStatus.fuelLabel}
+                  active={systemStatus.fuelConnected}
+                />
+                <StatusRow
+                  label="Camp save"
+                  value={systemStatus.campLabel}
+                  active={systemStatus.campSaved}
+                />
+              </div>
+            </SectionCard>
           </div>
 
-          <div className="lg:col-span-7 space-y-6">
-            <Card
-              title="Camp summary"
-              sub="What matters right now."
-              right={hasCamp ? <Badge tone="good">Ready</Badge> : <Badge tone="neutral">Waiting</Badge>}
-            >
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Directive</div>
-                  <div className="mt-2 text-sm font-semibold text-slate-50">{campSummary.directiveTitle}</div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Training load</div>
-                  <div className="mt-2">
-                    {props.control ? (
-                      <Badge tone={loadTone(props.control.trainingLoad)}>{campSummary.load}</Badge>
-                    ) : (
-                      <span className="text-sm text-slate-400">—</span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Primary focus</div>
-                  <div className="mt-2 text-sm text-slate-100">{campSummary.primaryFocus}</div>
-                </div>
-
-                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-                  <div className="text-[11px] tracking-[0.22em] uppercase text-emerald-200/80">Next step</div>
-                  <div className="mt-2 text-sm text-slate-100">{campSummary.nextStep}</div>
-                </div>
-              </div>
-            </Card>
-
-            <Card
-              title="Camp output"
-              sub="Directive first. Tabs keep the camp easy to read."
+          <div className="space-y-5 xl:col-span-5">
+            <SectionCard
+              title="Directive"
+              subtitle="The camp should revolve around one real problem."
               right={
-                props.busy ? (
-                  <Badge tone="warn">{stageLabel(props.buildStage)}</Badge>
-                ) : hasCamp ? (
-                  <Badge tone="good">Built</Badge>
+                directive ? (
+                  <Badge label="Active directive" tone="good" />
                 ) : (
-                  <Badge tone="neutral">No output</Badge>
+                  <Badge label="No directive yet" tone="warn" />
                 )
               }
             >
-              {props.busy ? (
-                <BuildRitual stage={props.buildStage} />
-              ) : (
-                <>
-                  <div className="flex flex-wrap gap-2">
-                    {outputTabs.map((tab) => {
-                      const active = tab.id === activeOutputTab;
-                      return (
-                        <button
-                          key={tab.id}
-                          type="button"
-                          onClick={() => setActiveOutputTab(tab.id)}
-                          className={cn(
-                            "rounded-full border px-3 py-1.5 text-xs transition",
-                            active
-                              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-                              : "border-slate-800/70 bg-slate-950/30 text-slate-200/80 hover:bg-slate-900/30"
-                          )}
-                        >
-                          {tab.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="mt-4">
-                    {activeOutputTab === "directive" && (
-                      <>
-                        {!props.directive ? (
-                          <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
-                            No directive yet. Run Sensei Vision, then Build camp.
-                          </div>
-                        ) : (
-                          <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-semibold text-slate-50">{props.directive.title}</div>
-                                <div className="mt-1 text-xs text-slate-300/70">{props.directive.source}</div>
-                              </div>
-                              <Badge tone="neutral">Directive</Badge>
-                            </div>
-                            <div className="mt-3">
-                              <Bullets items={props.directive.bullets} />
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    )}
-
-                    {activeOutputTab === "training" && (
-                      <>
-                        {!props.trainingFocus ? (
-                          <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
-                            Build camp to generate a concrete training focus.
-                          </div>
-                        ) : (
-                          <div className="grid gap-4 md:grid-cols-3">
-                            <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                              <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Primary</div>
-                              <div className="mt-2">
-                                <Bullets items={props.trainingFocus.primary} />
-                              </div>
-                            </div>
-                            <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                              <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Secondary</div>
-                              <div className="mt-2">
-                                <Bullets items={props.trainingFocus.secondary} />
-                              </div>
-                            </div>
-                            <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                              <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Avoid</div>
-                              <div className="mt-2">
-                                <Bullets items={props.trainingFocus.avoid} />
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    )}
-
-                    {activeOutputTab === "control" && (
-                      <>
-                        {!props.control ? (
-                          <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
-                            Build camp to set training load and next step.
-                          </div>
-                        ) : (
-                          <div className="space-y-4">
-                            <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Training load</div>
-                                <Badge tone={loadTone(props.control.trainingLoad)}>{props.control.trainingLoad}</Badge>
-                              </div>
-                            </div>
-
-                            <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                              <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Warnings</div>
-                              <div className="mt-2">
-                                <Bullets items={props.control.warnings} />
-                              </div>
-                            </div>
-
-                            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-                              <div className="text-[11px] tracking-[0.22em] uppercase text-emerald-200/80">Next step</div>
-                              <div className="mt-2">
-                                <Bullets items={props.control.nextStep} />
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    )}
-
-                    {activeOutputTab === "execution" && (
-                      <div className="space-y-4">
-                        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <div className="text-[11px] tracking-[0.22em] uppercase text-emerald-200/80">Daily session</div>
-                              <div className="mt-2 text-sm font-semibold text-slate-50">
-                                {props.dailySession?.title ?? "Build camp to generate the first daily session."}
-                              </div>
-                            </div>
-                            {props.dailySession ? (
-                              <Badge tone="good">{props.dailySession.durationMin} min</Badge>
-                            ) : (
-                              <Badge tone="warn">Pending</Badge>
-                            )}
-                          </div>
-
-                          {props.dailySession ? (
-                            <>
-                              <div className="mt-2 text-sm text-slate-300/80">
-                                {props.dailySession.timingLabel} · Goal: {props.dailySession.goal}
-                              </div>
-                              <div className="mt-3">
-                                <Bullets items={props.dailySession.blocks} />
-                              </div>
-                            </>
-                          ) : null}
-                        </div>
-
-                        <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">Today’s checklist</div>
-                            <Badge tone={completedCount === props.checklist.length && props.checklist.length > 0 ? "good" : "neutral"}>
-                              {completedCount}/{props.checklist.length} done
-                            </Badge>
-                          </div>
-
-                          {props.checklist.length ? (
-                            <div className="mt-3 space-y-2">
-                              {props.checklist.map((item) => (
-                                <button
-                                  key={item.id}
-                                  type="button"
-                                  onClick={() => props.onToggleChecklistItem(item.id)}
-                                  className={cn(
-                                    "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition",
-                                    item.done
-                                      ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-100"
-                                      : "border-slate-800/60 bg-slate-950/30 text-slate-100 hover:bg-slate-900/30"
-                                  )}
-                                >
-                                  <span
-                                    className={cn(
-                                      "inline-flex h-5 w-5 items-center justify-center rounded border text-xs font-semibold",
-                                      item.done
-                                        ? "border-emerald-400/40 bg-emerald-400/20 text-emerald-200"
-                                        : "border-slate-700/70 bg-slate-950 text-slate-400"
-                                    )}
-                                  >
-                                    {item.done ? "✓" : ""}
-                                  </span>
-                                  <span className="text-sm">{item.label}</span>
-                                </button>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="mt-3 text-sm text-slate-400">
-                              Build camp to generate today’s tasks.
-                            </div>
-                          )}
-
-                          <div className="mt-3 text-xs text-slate-300/60">
-                            Keep it simple. Complete the camp. Then review with Vision and Fuel if needed.
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {activeOutputTab === "gyms" && (
-                      <>
-                        {!props.gyms.length ? (
-                          <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
-                            No real gym recommendations yet. Add gyms in Supabase and make sure RLS allows read access.
-                          </div>
-                        ) : (
-                          <div className="space-y-4">
-                            {topGym ? (
-                              <div>
-                                <div className="mb-2 text-[11px] tracking-[0.22em] uppercase text-emerald-200/80">
-                                  Top recommendation
-                                </div>
-                                <CompactGymCard gym={topGym} defaultOpen />
-                              </div>
-                            ) : null}
-
-                            {secondaryGyms.length ? (
-                              <div>
-                                <div className="mb-2 text-[11px] tracking-[0.22em] uppercase text-slate-400/70">
-                                  Other support options
-                                </div>
-                                <div className="space-y-3">
-                                  {secondaryGyms.map((gym) => (
-                                    <CompactGymCard key={gym.id} gym={gym} />
-                                  ))}
-                                </div>
-                              </div>
-                            ) : null}
-
-                            <div className="text-xs text-slate-300/60">
-                              Sensei gives one main recommendation first. Other gyms stay secondary.
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </>
-              )}
-            </Card>
-
-            <Card
-              title="Sensei Chat"
-              sub={props.followupsId ? "Ask about camp decisions. Short, concrete, coach-like." : "Build camp to unlock context."}
-              right={<Badge tone={props.followupsId ? "good" : "warn"}>{props.followupsId ? "Unlocked" : "Locked"}</Badge>}
-            >
-              <div className="flex flex-wrap gap-2">
-                {chatTabs.map((t) => {
-                  const active = t.id === props.activeChatSection;
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => props.setActiveChatSection(t.id)}
-                      className={cn(
-                        "rounded-full border px-3 py-1.5 text-xs transition",
-                        active
-                          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-                          : "border-slate-800/70 bg-slate-950/30 text-slate-200/80 hover:bg-slate-900/30"
-                      )}
-                    >
-                      {t.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="mt-4 max-h-[320px] overflow-y-auto rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4 space-y-3">
-                {filteredMessages.length === 0 ? <div className="text-sm text-slate-300/70">No messages yet.</div> : null}
-
-                {filteredMessages.map((m) => (
-                  <div
-                    key={m.id}
-                    className={cn(
-                      "rounded-2xl border p-3",
-                      m.role === "user"
-                        ? "border-emerald-500/20 bg-emerald-500/10"
-                        : m.role === "sensei"
-                        ? "border-slate-800/70 bg-slate-950/35"
-                        : "border-amber-500/20 bg-amber-500/10"
-                    )}
-                  >
-                    <div className="mb-1 flex items-center justify-between">
-                      <div className="text-[11px] tracking-[0.22em] uppercase text-slate-400/70">
-                        {m.role === "user" ? "User" : m.role === "sensei" ? "Sensei" : "System"}
-                      </div>
-                      <div className="text-[11px] text-slate-400/60">{m.section.toUpperCase()}</div>
+              {directive ? (
+                <div className="space-y-4">
+                  <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                    <div className="text-sm font-semibold text-slate-50">
+                      {directive.title}
                     </div>
-                    <div className="whitespace-pre-wrap text-sm text-slate-100/90">{m.text}</div>
+                    <div className="mt-1 text-xs text-slate-300/70">
+                      {directive.source}
+                    </div>
                   </div>
-                ))}
-              </div>
+                  <BulletList items={directive.bullets} />
+                </div>
+              ) : (
+                <div className="text-sm text-slate-300/70">
+                  Build camp after loading Vision so Sensei has a real directive.
+                </div>
+              )}
+            </SectionCard>
 
-              <div className="mt-4 flex gap-2">
-                <textarea
-                  value={props.chatInput}
-                  onChange={(e) => props.setChatInput(e.target.value)}
-                  onKeyDown={props.onChatKeyDown}
-                  placeholder={props.followupsId ? "Ask about camp decisions…" : "Build camp first…"}
-                  disabled={!props.followupsId}
-                  rows={2}
-                  className="w-full resize-none rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/20 disabled:opacity-60"
-                />
-                <button
-                  onClick={props.onSendChat}
-                  disabled={!props.followupsId || !(props.chatInput.trim().length > 0) || props.chatSending}
-                  className={cn(
-                    "rounded-2xl px-5 text-sm font-medium transition",
-                    props.followupsId && props.chatInput.trim().length > 0 && !props.chatSending
-                      ? "bg-emerald-400/95 text-slate-950 hover:bg-emerald-300"
-                      : "bg-slate-800/60 text-slate-400 cursor-not-allowed"
+            <SectionCard
+              title="Training focus"
+              subtitle="Primary, secondary, and what to avoid."
+            >
+              {trainingFocus ? (
+                <div className="space-y-5">
+                  <div>
+                    <div className="mb-2 text-xs uppercase tracking-[0.22em] text-slate-400/70">
+                      Primary
+                    </div>
+                    <BulletList items={trainingFocus.primary} />
+                  </div>
+                  <div>
+                    <div className="mb-2 text-xs uppercase tracking-[0.22em] text-slate-400/70">
+                      Secondary
+                    </div>
+                    <BulletList items={trainingFocus.secondary} />
+                  </div>
+                  <div>
+                    <div className="mb-2 text-xs uppercase tracking-[0.22em] text-slate-400/70">
+                      Avoid
+                    </div>
+                    <BulletList items={trainingFocus.avoid} />
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-slate-300/70">
+                  No training focus yet. Build camp first.
+                </div>
+              )}
+            </SectionCard>
+
+            <SectionCard
+              title="Camp control"
+              subtitle="Load, warnings, and next actions."
+              right={
+                control ? (
+                  <Badge label={control.trainingLoad} tone="warn" />
+                ) : (
+                  <Badge label="No control state" tone="neutral" />
+                )
+              }
+            >
+              {control ? (
+                <div className="space-y-5">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <MiniStat label="Training load" value={control.trainingLoad} />
+                    <MiniStat label="Warnings" value={String(control.warnings.length)} />
+                    <MiniStat label="Next steps" value={String(control.nextStep.length)} />
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-xs uppercase tracking-[0.22em] text-slate-400/70">
+                      Warnings
+                    </div>
+                    <BulletList items={control.warnings} />
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-xs uppercase tracking-[0.22em] text-slate-400/70">
+                      Next steps
+                    </div>
+                    <BulletList items={control.nextStep} />
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-slate-300/70">
+                  No control state yet.
+                </div>
+              )}
+            </SectionCard>
+
+            <SectionCard
+              title="Today’s session"
+              subtitle="The daily executable block."
+              right={
+                dailySession ? (
+                  <Badge label={`${dailySession.durationMin} min`} tone="good" />
+                ) : (
+                  <Badge label="No session yet" tone="warn" />
+                )
+              }
+            >
+              {dailySession ? (
+                <div className="space-y-4">
+                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
+                    <div className="text-sm font-semibold text-slate-50">
+                      {dailySession.title}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-300/70">
+                      {dailySession.timingLabel} · Goal: {dailySession.goal}
+                    </div>
+                  </div>
+                  <BulletList items={dailySession.blocks} />
+                </div>
+              ) : (
+                <div className="text-sm text-slate-300/70">
+                  Build camp to generate a daily session.
+                </div>
+              )}
+            </SectionCard>
+
+            <SectionCard
+              title="Checklist"
+              subtitle="Track execution, not intention."
+            >
+              {checklist.length ? (
+                <div className="space-y-3">
+                  {checklist.map((item) => (
+                    <label
+                      key={item.id}
+                      className="flex items-center gap-3 rounded-2xl border border-slate-800/60 bg-slate-950/25 px-4 py-3"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={item.done}
+                        onChange={() => onToggleChecklistItem(item.id)}
+                        className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-emerald-400 focus:ring-emerald-400/30"
+                      />
+                      <span
+                        className={cn(
+                          "text-sm",
+                          item.done
+                            ? "text-slate-400 line-through"
+                            : "text-slate-100"
+                        )}
+                      >
+                        {item.label}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-slate-300/70">
+                  No checklist yet.
+                </div>
+              )}
+            </SectionCard>
+          </div>
+
+          <div className="space-y-5 xl:col-span-3">
+            <SectionCard
+              title="Gym support"
+              subtitle="The room should support the directive, not sabotage it."
+              right={
+                gyms.length ? (
+                  <Badge label={`${gyms.length} gyms`} tone="good" />
+                ) : (
+                  <Badge label="No ranked gyms" tone="warn" />
+                )
+              }
+            >
+              {gyms.length ? (
+                <div className="space-y-4">
+                  {gyms.slice(0, 3).map((gym) => (
+                    <div
+                      key={gym.id}
+                      className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-slate-50">
+                            {gym.name}
+                          </div>
+                          <div className="mt-1 text-xs text-slate-300/70">
+                            {gym.location}
+                          </div>
+                        </div>
+                        <Badge
+                          label={`${gym.compatibility}%`}
+                          tone={gym.compatibility >= 75 ? "good" : gym.compatibility >= 55 ? "warn" : "bad"}
+                        />
+                      </div>
+
+                      <div className="mt-3 space-y-3">
+                        <div>
+                          <div className="mb-1 text-[11px] uppercase tracking-[0.22em] text-slate-400/70">
+                            Reason
+                          </div>
+                          <BulletList items={gym.reason} />
+                        </div>
+                        <div>
+                          <div className="mb-1 text-[11px] uppercase tracking-[0.22em] text-slate-400/70">
+                            Best for
+                          </div>
+                          <BulletList items={gym.bestFor} />
+                        </div>
+                        <div>
+                          <div className="mb-1 text-[11px] uppercase tracking-[0.22em] text-slate-400/70">
+                            Watch out
+                          </div>
+                          <BulletList items={gym.watchOut} />
+                        </div>
+                      </div>
+
+                      {gym.href ? (
+                        <Link
+                          href={gym.href}
+                          className="mt-4 inline-flex text-xs text-emerald-300 hover:text-emerald-200"
+                        >
+                          Open gym →
+                        </Link>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-slate-300/70">
+                  No ranked gyms yet. Build camp first.
+                </div>
+              )}
+            </SectionCard>
+
+            <SectionCard
+              title="Sensei chat"
+              subtitle="Ask for decisions, not motivation."
+              right={<Badge label={CHAT_SECTION_LABELS[activeChatSection]} tone="neutral" />}
+            >
+              <div className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  {CHAT_SECTIONS.map((section) => (
+                    <PillButton
+                      key={section}
+                      active={activeChatSection === section}
+                      label={CHAT_SECTION_LABELS[section]}
+                      onClick={() => setActiveChatSection(section)}
+                    />
+                  ))}
+                </div>
+
+                <div className="flex h-[420px] min-h-[420px] flex-col gap-2 overflow-y-auto rounded-2xl border border-slate-800/60 bg-slate-950/25 p-2.5 sm:h-[380px] sm:min-h-[380px] sm:gap-3 sm:p-3">
+                  {visibleMessages.length ? (
+                    visibleMessages.map((msg) => (
+                      <ChatBubble key={msg.id} msg={msg} />
+                    ))
+                  ) : (
+                    <div className="text-sm text-slate-400/70">
+                      No messages in {CHAT_SECTION_LABELS[activeChatSection]} yet.
+                    </div>
                   )}
-                >
-                  {props.chatSending ? "…" : "Send"}
-                </button>
-              </div>
+                </div>
 
-              <div className="mt-2 text-xs text-slate-300/60">
-                Ask like a coach: “Given Vision finding #1, what do we cut from sparring this week?”
+                <div className="space-y-3">
+                  <textarea
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={onChatKeyDown}
+                    rows={3}
+                    placeholder="Ask Sensei something direct. Example: Why should I pick Kuma Team?"
+                    className="w-full rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm leading-6 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
+                  />
+
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs text-slate-400/70">
+                      Build camp first for stronger answers.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={onSendChat}
+                      disabled={chatSending}
+                      className="rounded-2xl bg-emerald-400/95 px-4 py-2.5 text-sm font-medium text-slate-950 hover:bg-emerald-300 disabled:opacity-60"
+                    >
+                      {chatSending ? "Sending..." : "Ask Sensei"}
+                    </button>
+                  </div>
+                </div>
               </div>
-            </Card>
+            </SectionCard>
           </div>
         </div>
       </div>
