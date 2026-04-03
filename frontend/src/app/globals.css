@@ -9,8 +9,8 @@
 :root {
   --bg0: #070a12;
   --bg1: #0a0f1c;
-  --card: rgba(255, 255, 255, 0.02);
-  --border: rgba(255, 255, 255, 0.08);
+  --topbar-h: 64px;
+  --bottomnav-h: 78px;
 }
 
 html,
@@ -20,37 +20,44 @@ body {
   height: 100%;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   color: #ffffff;
-  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-
-  /* “Real app” cinematic depth */
+  font-family: var(--font-inter), Inter, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
   background:
-    radial-gradient(1200px 800px at 20% 10%, rgba(16, 185, 129, 0.10), transparent 60%),
-    radial-gradient(900px 700px at 80% 0%, rgba(56, 189, 248, 0.06), transparent 55%),
-    radial-gradient(1000px 900px at 50% 120%, rgba(99, 102, 241, 0.06), transparent 55%),
+    radial-gradient(1200px 800px at 20% 10%, rgba(16, 185, 129, 0.08), transparent 60%),
+    radial-gradient(900px 700px at 80% 0%, rgba(56, 189, 248, 0.05), transparent 55%),
+    radial-gradient(1000px 900px at 50% 120%, rgba(99, 102, 241, 0.04), transparent 55%),
     linear-gradient(180deg, var(--bg0), var(--bg1));
 }
 
-/* Better text rendering */
 * {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   box-sizing: border-box;
 }
 
-/* Selection */
+h1,
+h2,
+h3,
+h4 {
+  letter-spacing: -0.02em;
+}
+
 ::selection {
   background: rgba(16, 185, 129, 0.25);
 }
 
-/* Optional: nicer scrollbars */
 *::-webkit-scrollbar {
   height: 10px;
   width: 10px;
 }
 *::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.1);
   border-radius: 999px;
 }
 *::-webkit-scrollbar-thumb:hover {
@@ -58,23 +65,61 @@ body {
 }
 
 /* --------------------------
+   APP SHELL
+--------------------------- */
+
+.app-main-shell {
+  min-height: 100vh;
+  padding-top: calc(var(--topbar-h) + 10px);
+  padding-bottom: calc(var(--bottomnav-h) + 18px + env(safe-area-inset-bottom));
+}
+
+.app-page-frame {
+  width: 100%;
+  max-width: 920px;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+@media (min-width: 768px) {
+  .app-page-frame {
+    max-width: 980px;
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+}
+
+.app-bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  height: calc(var(--bottomnav-h) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(2, 8, 23, 0.82);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.22);
+}
+
+/* --------------------------
    INPUT SYSTEM
 --------------------------- */
 
 .input {
-  @apply w-full bg-slate-900/40 text-white placeholder:text-slate-500
-    px-3 py-2 rounded-xl border border-white/10
-    focus:border-emerald-400 outline-none transition;
+  @apply w-full rounded-2xl border border-white/10 bg-slate-900/40 px-3 py-2 text-white placeholder:text-slate-500 outline-none transition;
 }
 
 .input:focus {
-  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.7);
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.1);
 }
 
 .select {
-  @apply w-full bg-slate-900/40 text-white
-    px-3 py-2 rounded-xl border border-white/10
-    focus:border-emerald-400 outline-none transition;
+  @apply w-full rounded-2xl border border-white/10 bg-slate-900/40 px-3 py-2 text-white outline-none transition;
 }
 
 /* --------------------------
@@ -82,15 +127,11 @@ body {
 --------------------------- */
 
 .btn-primary {
-  @apply bg-emerald-400 text-slate-950
-    px-4 py-2 rounded-xl font-semibold
-    hover:bg-emerald-300 transition;
+  @apply rounded-2xl bg-emerald-400 px-4 py-2 font-semibold text-slate-950 transition hover:bg-emerald-300;
 }
 
 .btn-secondary {
-  @apply bg-transparent border border-white/15
-    px-4 py-2 rounded-xl text-white
-    hover:border-white/30 transition;
+  @apply rounded-2xl border border-white/15 bg-transparent px-4 py-2 text-white transition hover:border-white/30;
 }
 
 /* --------------------------
@@ -98,12 +139,11 @@ body {
 --------------------------- */
 
 .form-card {
-  @apply bg-slate-900/30 backdrop-blur-xl rounded-2xl p-8
-    border border-white/5 shadow-xl;
+  @apply rounded-3xl border border-white/5 bg-slate-900/30 p-8 shadow-xl backdrop-blur-xl;
 }
 
 .form-section-title {
-  @apply text-lg font-semibold text-white mb-4;
+  @apply mb-4 text-lg font-semibold text-white;
 }
 
 /* --------------------------

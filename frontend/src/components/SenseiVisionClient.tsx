@@ -1,148 +1,131 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import SenseiVisionScreen from "@/components/SenseiVisionScreen";
-import type { VisionAnalysis, VisionAnalyzeResponse } from "@/lib/senseiVisionTypes";
-
-type VisionErrorPayload = {
-  ok?: boolean;
-  error?: string;
-  raw?: string;
-};
+import type { VisionAnalysis } from "@/lib/senseiVisionTypes";
 
 export type VisionBuildStage =
   | "IDLE"
+  | "UPLOADING_FRAME"
   | "READING_FRAME"
-  | "DETECTING_DISCIPLINE"
-  | "DETECTING_TECHNIQUE"
-  | "RESTRICTING_FIXES"
   | "BUILDING_CORRECTION"
   | "DONE"
   | "ERROR";
 
 export type VisionChatMessage = {
   id: string;
-  role: "user" | "vision" | "system";
+  role: "system" | "user" | "vision";
   text: string;
   ts: number;
 };
 
-async function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
+type VisionApiSuccess = {
+  ok: true;
+  analysis: VisionAnalysis;
+};
 
-    reader.onload = () => {
-      resolve(String(reader.result || ""));
-    };
+type VisionApiError = {
+  ok: false;
+  error: string;
+};
 
-    reader.onerror = () => reject(new Error("Failed to read file."));
-    reader.readAsDataURL(file);
-  });
-}
-
-function isVisionSuccess(data: unknown): data is { ok: true; analysis: VisionAnalysis } {
-  if (!data || typeof data !== "object") return false;
-  if (!("ok" in data) || (data as { ok?: unknown }).ok !== true) return false;
-  return "analysis" in data;
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+type VisionApiResponse = VisionApiSuccess | VisionApiError;
 
 function uid() {
   return Math.random().toString(36).slice(2);
 }
 
-function buildVisionReply(question: string, analysis: VisionAnalysis | null): string {
-  if (!analysis) {
-    return "Run an analysis first. Vision only answers questions about the current frame.";
+function cleanText(text?: string | null) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function compact(text?: string | null, max = 220) {
+  const value = cleanText(text);
+  if (!value) return "";
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1).trim()}…`;
+}
+
+function firstSentence(text?: string | null) {
+  const value = cleanText(text);
+  if (!value) return "";
+  const match = value.match(/^.*?[.!?](\s|$)/);
+  return match ? match[0].trim() : value;
+}
+
+function normalizeVisionAnalysis(analysis: VisionAnalysis): VisionAnalysis {
+  const findings = Array.isArray((analysis as any)?.findings)
+    ? (analysis as any).findings.map((f: any) => ({
+        ...f,
+        title: cleanText(f?.title),
+        severity: cleanText(f?.severity || "MEDIUM").toUpperCase(),
+        interrupt: cleanText(f?.interrupt),
+        fix_next_rep: cleanText(f?.fix_next_rep),
+        good: cleanText(f?.good),
+        unstable: cleanText(f?.unstable),
+        break_point: cleanText(f?.break_point),
+        dashboard_detail: cleanText(f?.dashboard_detail),
+        if_ignored: cleanText(f?.if_ignored),
+        short_detail: cleanText(f?.short_detail),
+        detail: cleanText(f?.detail),
+        train: Array.isArray(f?.train)
+          ? f.train.map((item: unknown) => cleanText(String(item))).filter(Boolean)
+          : [],
+      }))
+    : [];
+
+  return {
+    ...(analysis as any),
+    clipLabel: cleanText((analysis as any)?.clipLabel || "Frame upload"),
+    summary: cleanText((analysis as any)?.summary),
+    findings,
+  } as VisionAnalysis;
+}
+
+function buildVisionContext(analysis: VisionAnalysis | null) {
+  if (!analysis) return "No current frame analysis loaded.";
+
+  const findings = Array.isArray((analysis as any)?.findings)
+    ? ((analysis as any).findings as any[])
+    : [];
+
+  const top = findings[0];
+
+  const parts: string[] = [
+    `Clip label: ${cleanText((analysis as any)?.clipLabel || "Unknown")}`,
+    `Summary: ${cleanText((analysis as any)?.summary || "None")}`,
+  ];
+
+  if (top) {
+    parts.push(`Primary correction: ${cleanText(top.title || "Unknown")}`);
+    parts.push(`Severity: ${cleanText(top.severity || "Unknown")}`);
+    parts.push(`Interrupt: ${cleanText(top.interrupt || "None")}`);
+    parts.push(`Fix next rep: ${cleanText(top.fix_next_rep || "None")}`);
+    parts.push(`Good: ${cleanText(top.good || "None")}`);
+    parts.push(`Unstable: ${cleanText(top.unstable || "None")}`);
+    parts.push(`Break point: ${cleanText(top.break_point || "None")}`);
+    parts.push(`If ignored: ${cleanText(top.if_ignored || "None")}`);
+    parts.push(`Detail: ${cleanText(top.detail || top.dashboard_detail || "None")}`);
   }
 
-  const q = question.toLowerCase().trim();
-  const technique = analysis.technique_detected || "the current technique";
-  const primaryError = analysis.primary_error || "the main mechanical issue";
-  const why = analysis.why_it_matters || "it affects efficiency and control";
-  const oneFix = analysis.one_fix || "clean up the main error first";
-  const drills = Array.isArray(analysis.drills) ? analysis.drills : [];
-  const positives = Array.isArray(analysis.what_you_did_right) ? analysis.what_you_did_right : [];
-  const safety = Array.isArray(analysis.safety) ? analysis.safety : [];
-  const allowed = Array.isArray(analysis.allowed_fix_family) ? analysis.allowed_fix_family : [];
+  return parts.join("\n");
+}
 
-  if (q.includes("why") || q.includes("matter")) {
-    return [
-      `Main issue on this ${technique}: ${primaryError}.`,
-      `Why it matters: ${why}.`,
-      `Do not chase five fixes at once. Clean this first, then re-test the frame.`,
-    ].join("\n");
-  }
-
-  if (q.includes("first") || q.includes("focus") || q.includes("next rep")) {
-    return [
-      `First focus: ${oneFix}.`,
-      `On the next rep, keep your attention on one thing only.`,
-      `Do not add extra changes until this one starts looking cleaner.`,
-    ].join("\n");
-  }
-
-  if (q.includes("drill") || q.includes("train")) {
-    return drills.length
-      ? [
-          `Best drill focus for this frame:`,
-          ...drills.map((d, i) => `${i + 1}. ${d}`),
-          `Start with the slowest, cleanest version first.`,
-        ].join("\n")
-      : `No drills were returned for this frame. Stay with the main fix: ${oneFix}.`;
-  }
-
-  if (q.includes("good") || q.includes("right")) {
-    return positives.length
-      ? [
-          `What was good in this frame:`,
-          ...positives.map((p, i) => `${i + 1}. ${p}`),
-          `Keep these while cleaning the main error.`,
-        ].join("\n")
-      : `Vision did not return strong positives here. Treat this frame mainly as a correction rep.`;
-  }
-
-  if (q.includes("safe") || q.includes("injury") || q.includes("hurt")) {
-    return safety.length
-      ? [
-          `Safety notes for this frame:`,
-          ...safety.map((s, i) => `${i + 1}. ${s}`),
-        ].join("\n")
-      : `No extra safety notes were returned. Stay controlled and do not force range before mechanics are clean.`;
-  }
-
-  if (q.includes("detected") || q.includes("what is this") || q.includes("technique")) {
-    return [
-      `Detected discipline: ${analysis.discipline_detected}.`,
-      `Detected technique: ${technique}.`,
-      allowed.length ? `Allowed fix family: ${allowed.join(", ")}.` : `Allowed fix family was not returned.`,
-    ].join("\n");
-  }
-
-  if (q.includes("simple") || q.includes("simpler") || q.includes("explain")) {
-    return [
-      `Simple version:`,
-      `${primaryError}.`,
-      `${oneFix}.`,
-      `That is the only thing to clean first on this frame.`,
-    ].join("\n");
-  }
-
-  return [
-    `For this frame, stay tied to the main issue: ${primaryError}.`,
-    `Main fix: ${oneFix}.`,
-    `If you want a better answer, ask something specific like: "why does this matter?", "which drill first?", or "what do I focus on next rep?"`,
-  ].join("\n");
+function formatVisionChatReply(raw: string) {
+  const clean = cleanText(raw);
+  if (!clean) return "Vision returned no usable answer.";
+  return compact(clean, 320);
 }
 
 export default function SenseiVisionClient() {
-  const [sport, setSport] = useState("MMA");
+  const [sport, setSport] = useState("Wrestling");
   const [clipLabel, setClipLabel] = useState("Frame upload");
-  const [notes, setNotes] = useState("");
-  const [file, setFile] = useState<File | null>(null);
+  const [notes, setNotes] = useState(
+    "Whenever I try to do a Russian tie snap, I always get sprawled on"
+  );
+
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFileName, setSelectedFileName] = useState("");
 
   const [running, setRunning] = useState(false);
   const [buildStage, setBuildStage] = useState<VisionBuildStage>("IDLE");
@@ -155,122 +138,54 @@ export default function SenseiVisionClient() {
     {
       id: uid(),
       role: "system",
-      text: "Ask about this frame after analysis. Keep questions technical and specific.",
+      text: "Vision only answers questions tied to the active frame and correction.",
       ts: Date.now(),
     },
   ]);
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("disciplin_latest_vision");
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as VisionAnalysis;
+      setAnalysis(normalizeVisionAnalysis(parsed));
+    } catch {
+      // ignore bad local storage
+    }
+  }, []);
+
   const quickPrompts = useMemo(
     () => [
-      "Why is this the main error?",
-      "What do I focus on next rep?",
-      "Which drill should I do first?",
-      "Explain this in simpler terms.",
+      "What exactly is breaking first?",
+      "What should I keep doing?",
+      "What is the smallest fix next rep?",
+      "What happens if I ignore this?",
+      "What should I train today from this frame?",
     ],
     []
   );
 
-  async function onAnalyze() {
-    if (!file) {
-      setError("Upload a frame first.");
-      return;
-    }
+  function pushSystemMessage(text: string) {
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        id: uid(),
+        role: "system",
+        text,
+        ts: Date.now(),
+      },
+    ]);
+  }
 
-    setRunning(true);
-    setBuildStage("READING_FRAME");
+  function onFileChange(file: File | null) {
+    setSelectedFile(file);
+    setSelectedFileName(file?.name || "");
     setError(null);
-
-    try {
-      await delay(180);
-      const imageBase64 = await fileToBase64(file);
-
-      setBuildStage("DETECTING_DISCIPLINE");
-      await delay(220);
-
-      setBuildStage("DETECTING_TECHNIQUE");
-      await delay(220);
-
-      setBuildStage("RESTRICTING_FIXES");
-      await delay(220);
-
-      const res = await fetch("/api/sensei-vision", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          sport,
-          clipLabel,
-          notes,
-          imageBase64,
-        }),
-      });
-
-      setBuildStage("BUILDING_CORRECTION");
-
-      const rawText = await res.text();
-
-      let data: VisionAnalyzeResponse | VisionErrorPayload | null = null;
-      try {
-        data = rawText ? (JSON.parse(rawText) as VisionAnalyzeResponse | VisionErrorPayload) : null;
-      } catch {
-        data = null;
-      }
-
-      if (!res.ok) {
-        const backendError =
-          data && typeof data === "object" && "error" in data && typeof data.error === "string"
-            ? data.error
-            : `Vision request failed (${res.status})`;
-
-        const backendRaw =
-          data && typeof data === "object" && "raw" in data && typeof data.raw === "string"
-            ? `\n\nRaw: ${data.raw}`
-            : "";
-
-        setBuildStage("ERROR");
-        setError(`${backendError}${backendRaw}`);
-        return;
-      }
-
-      if (!isVisionSuccess(data)) {
-        const fallbackError =
-          data && typeof data === "object" && "error" in data && typeof data.error === "string"
-            ? data.error
-            : "Vision returned an unexpected response.";
-
-        setBuildStage("ERROR");
-        setError(fallbackError);
-        return;
-      }
-
-      await delay(180);
-
-      setAnalysis(data.analysis);
-      localStorage.setItem("disciplin_latest_vision", JSON.stringify(data.analysis));
-      setBuildStage("DONE");
-      setChatMessages([
-        {
-          id: uid(),
-          role: "system",
-          text: `Frame ready. Ask about ${data.analysis.technique_detected || "this frame"}.`,
-          ts: Date.now(),
-        },
-      ]);
-      setChatInput("");
-    } catch (err: unknown) {
-      setBuildStage("ERROR");
-      setError(err instanceof Error ? err.message : "Vision failed.");
-    } finally {
-      setRunning(false);
-    }
   }
 
   function onReset() {
-    setSport("MMA");
-    setClipLabel("Frame upload");
-    setNotes("");
-    setFile(null);
+    setSelectedFile(null);
+    setSelectedFileName("");
     setRunning(false);
     setBuildStage("IDLE");
     setError(null);
@@ -281,45 +196,170 @@ export default function SenseiVisionClient() {
       {
         id: uid(),
         role: "system",
-        text: "Ask about this frame after analysis. Keep questions technical and specific.",
+        text: "Vision reset. Upload a new frame to build a correction.",
         ts: Date.now(),
       },
     ]);
+    localStorage.removeItem("disciplin_latest_vision");
   }
 
-  async function onSendChat() {
-    const text = chatInput.trim();
-    if (!text) return;
+  async function onAnalyze() {
+    if (!selectedFile) {
+      setError("Choose one frame image first.");
+      return;
+    }
 
-    setChatMessages((prev) => [
-      ...prev,
-      { id: uid(), role: "user", text, ts: Date.now() },
-    ]);
-    setChatInput("");
-    setChatSending(true);
+    setRunning(true);
+    setBuildStage("UPLOADING_FRAME");
+    setError(null);
 
     try {
-      await delay(180);
-      const reply = buildVisionReply(text, analysis);
+      const fileToBase64 = (file: File) =>
+        new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = String(reader.result || "");
+            const base64 = result.includes(",") ? result.split(",")[1] : result;
+            resolve(base64);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
 
-      setChatMessages((prev) => [
-        ...prev,
-        { id: uid(), role: "vision", text: reply, ts: Date.now() },
-      ]);
+      const imageBase64 = await fileToBase64(selectedFile);
+
+      setBuildStage("READING_FRAME");
+
+      const res = await fetch("/api/sensei-vision", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          imageBase64,
+          mimeType: selectedFile.type || "image/png",
+          clipLabel,
+          context: notes,
+          sport,
+        }),
+      });
+
+      setBuildStage("BUILDING_CORRECTION");
+
+      const data = (await res.json()) as VisionApiResponse;
+
+      if (!res.ok || !data || data.ok === false) {
+        throw new Error(
+          data && "error" in data && data.error
+            ? data.error
+            : "Sensei Vision failed to analyze the frame."
+        );
+      }
+
+      const normalized = normalizeVisionAnalysis(data.analysis);
+
+      setAnalysis(normalized);
+      localStorage.setItem("disciplin_latest_vision", JSON.stringify(normalized));
+
+      setBuildStage("DONE");
+      pushSystemMessage(`Correction ready: ${cleanText((normalized as any)?.findings?.[0]?.title || "Vision analysis complete")}`);
+    } catch (err: any) {
+      setBuildStage("ERROR");
+      setError(err?.message || "Sensei Vision failed.");
+      pushSystemMessage(`Vision failed: ${err?.message || "unknown error"}`);
     } finally {
-      setChatSending(false);
-    }
-  }
-
-  function onChatKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (!chatSending) onSendChat();
+      setRunning(false);
     }
   }
 
   function onQuickPrompt(prompt: string) {
     setChatInput(prompt);
+  }
+
+  function onChatKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (!chatSending) {
+        void onSendChat();
+      }
+    }
+  }
+
+  async function onSendChat() {
+    const question = cleanText(chatInput);
+    if (!question) return;
+
+    if (!analysis) {
+      pushSystemMessage("Run Vision on a frame first. Chat only works from an active analysis.");
+      setChatInput("");
+      return;
+    }
+
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        id: uid(),
+        role: "user",
+        text: question,
+        ts: Date.now(),
+      },
+    ]);
+
+    setChatInput("");
+    setChatSending(true);
+
+    try {
+      const context = buildVisionContext(analysis);
+
+      const res = await fetch("/api/sensei-vision/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question,
+          context,
+          analysis_id: (analysis as any)?.analysis_id || null,
+          clipLabel: (analysis as any)?.clipLabel || clipLabel,
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        throw new Error(data?.error || "Vision chat failed.");
+      }
+
+      const reply =
+        formatVisionChatReply(
+          data?.answer ||
+            data?.response ||
+            data?.message ||
+            "Vision returned no usable answer."
+        );
+
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: uid(),
+          role: "vision",
+          text: reply,
+          ts: Date.now(),
+        },
+      ]);
+    } catch (err: any) {
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: uid(),
+          role: "system",
+          text: `Vision chat failed: ${err?.message || "unknown error"}`,
+          ts: Date.now(),
+        },
+      ]);
+    } finally {
+      setChatSending(false);
+    }
   }
 
   return (
@@ -330,8 +370,8 @@ export default function SenseiVisionClient() {
       setClipLabel={setClipLabel}
       notes={notes}
       setNotes={setNotes}
-      selectedFileName={file?.name ?? ""}
-      onFileChange={setFile}
+      selectedFileName={selectedFileName}
+      onFileChange={onFileChange}
       onAnalyze={onAnalyze}
       onReset={onReset}
       running={running}

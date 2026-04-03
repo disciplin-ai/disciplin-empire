@@ -13,13 +13,25 @@ type WeightStatus =
 type VisionFinding = {
   id?: string;
   title: string;
-  detail: string;
   severity: "LOW" | "MEDIUM" | "HIGH";
+  interrupt?: string;
+  fix_next_rep?: string;
+
+  dashboard_detail?: string;
+  if_ignored?: string;
+  short_detail?: string;
+  detail?: string;
+
+  good?: string;
+  unstable?: string;
+  break_point?: string;
+  train?: string[];
 };
 
 type VisionAnalysis = {
   analysis_id?: string;
   clipLabel?: string;
+  summary?: string;
   findings?: VisionFinding[];
 };
 
@@ -75,67 +87,6 @@ function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
-function Badge({
-  children,
-  tone = "neutral",
-}: {
-  children: React.ReactNode;
-  tone?: "neutral" | "good" | "warn" | "bad";
-}) {
-  const cls =
-    tone === "good"
-      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-      : tone === "warn"
-      ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
-      : tone === "bad"
-      ? "border-rose-500/30 bg-rose-500/10 text-rose-200"
-      : "border-slate-700/60 bg-slate-900/30 text-slate-200/90";
-
-  return (
-    <span className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-xs", cls)}>
-      {children}
-    </span>
-  );
-}
-
-function Card({
-  title,
-  sub,
-  right,
-  children,
-}: {
-  title: string;
-  sub?: string;
-  right?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-3xl border border-slate-800/60 bg-slate-950/25 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] backdrop-blur">
-      <div className="flex items-start justify-between gap-3 border-b border-slate-800/40 px-5 py-4">
-        <div>
-          <div className="text-sm font-semibold text-slate-50">{title}</div>
-          {sub ? <div className="mt-1 text-xs text-slate-300/70">{sub}</div> : null}
-        </div>
-        {right}
-      </div>
-      <div className="px-5 py-5">{children}</div>
-    </section>
-  );
-}
-
-function Bullets({ items }: { items: string[] }) {
-  return (
-    <ul className="space-y-2 text-sm text-slate-100/90">
-      {items.map((item, i) => (
-        <li key={i} className="flex gap-2">
-          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-300/80" />
-          <span>{item}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 function readJson<T>(key: string): T | null {
   try {
     const raw = localStorage.getItem(key);
@@ -144,6 +95,25 @@ function readJson<T>(key: string): T | null {
   } catch {
     return null;
   }
+}
+
+function cleanSentence(text?: string | null) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function compactSentence(text?: string | null, max = 160) {
+  const clean = cleanSentence(text);
+  if (!clean) return "";
+  if (clean.length <= max) return clean;
+  return `${clean.slice(0, max - 1).trim()}…`;
+}
+
+function firstGoodText(...values: Array<string | null | undefined>) {
+  for (const value of values) {
+    const cleaned = cleanSentence(value);
+    if (cleaned) return cleaned;
+  }
+  return "";
 }
 
 function daysUntil(dateStr?: string | null): number | null {
@@ -173,11 +143,9 @@ function buildWeightStatus(args: {
   if (currentWeight === null || targetWeight === null) return "No Fight Scheduled";
 
   const diff = currentWeight - targetWeight;
-
   if (diff <= 0.5) return "On Track";
 
   const requiredPerDay = diff / Math.max(daysRemaining, 1);
-
   if (requiredPerDay <= 0.35) return "On Track";
   if (requiredPerDay <= 0.6) return "Slightly Behind";
   return "Off Track";
@@ -190,28 +158,6 @@ function statusTone(status: WeightStatus): "good" | "warn" | "bad" | "neutral" {
   return "neutral";
 }
 
-function getMissionBlocks(camp: SavedCamp | null) {
-  const primary = camp?.trainingFocus?.primary ?? [];
-  const secondary = camp?.trainingFocus?.secondary ?? [];
-  const control = camp?.control;
-  const session = camp?.dailySession;
-
-  return {
-    striking: primary[0] ?? "No striking mission set",
-    grappling: primary[1] ?? secondary[0] ?? "No grappling mission set",
-    conditioning:
-      control?.trainingLoad === "LOW"
-        ? "Low-output conditioning or active recovery"
-        : control?.trainingLoad === "HIGH"
-        ? "Hard conditioning focus"
-        : "Moderate conditioning focus",
-    recovery:
-      session?.goal?.toLowerCase().includes("mobility") || control?.trainingLoad === "LOW"
-        ? "Mobility + walk + breathing reset"
-        : "Recovery after main training block",
-  };
-}
-
 function getFuelTone(score?: number): "good" | "warn" | "bad" | "neutral" {
   if (typeof score !== "number") return "neutral";
   if (score >= 75) return "good";
@@ -222,16 +168,293 @@ function getFuelTone(score?: number): "good" | "warn" | "bad" | "neutral" {
 function fuelStatusLine(score?: number) {
   if (typeof score !== "number") return "No recent Fuel analysis.";
   if (score >= 80) return "Fuel support is strong for current camp load.";
-  if (score >= 60) return "Fuel support is acceptable, but there is room to tighten execution.";
+  if (score >= 60) return "Fuel support is acceptable, but can be tighter.";
   if (score >= 40) return "Fuel support is under target for reliable camp output.";
   return "Fuel support is weak and likely hurting recovery or performance.";
 }
 
 function fuelSnippet(report?: string) {
-  const text = String(report || "").replace(/\s+/g, " ").trim();
+  const text = cleanSentence(report);
   if (!text) return "Run Fuel AI to generate a nutrition report tied to your training.";
-  if (text.length <= 170) return text;
-  return `${text.slice(0, 169).trim()}…`;
+  if (text.length <= 120) return text;
+  return `${text.slice(0, 119).trim()}…`;
+}
+
+function severityTone(
+  severity?: VisionFinding["severity"]
+): "good" | "warn" | "bad" | "neutral" {
+  if (severity === "HIGH") return "bad";
+  if (severity === "MEDIUM") return "warn";
+  if (severity === "LOW") return "good";
+  return "neutral";
+}
+
+function badgeToneForLoad(
+  load?: CampControl["trainingLoad"]
+): "neutral" | "good" | "warn" | "bad" {
+  if (load === "LOW") return "good";
+  if (load === "MODERATE") return "warn";
+  if (load === "HIGH") return "bad";
+  return "neutral";
+}
+
+function fallbackInterrupt(title?: string, detail?: string) {
+  const t = String(title || "").toLowerCase();
+  const d = String(detail || "").toLowerCase();
+
+  if (t.includes("hips") || d.includes("hips")) return "Stop. Hips under you now.";
+  if (t.includes("head") || d.includes("head")) return "Stop. Head up before contact.";
+  if (t.includes("hand") || t.includes("reach") || d.includes("reach")) return "Stop reaching. Feet first.";
+  if (t.includes("trail leg") || d.includes("trail leg")) return "Stop. Bring the trail leg under.";
+  if (t.includes("foot") || d.includes("foot")) return "Stop. Bring the back foot up.";
+
+  return "Stop. Fix position before continuing.";
+}
+
+function fallbackFixNextRep(title?: string, detail?: string) {
+  const t = String(title || "").toLowerCase();
+  const d = String(detail || "").toLowerCase();
+
+  if (t.includes("hips") || d.includes("hips")) {
+    return "Step deep. Drop the knee. Bring hips under before reaching.";
+  }
+  if (t.includes("head") || d.includes("head")) {
+    return "Head up, connected, then drive through the finish.";
+  }
+  if (t.includes("hand") || t.includes("reach") || d.includes("reach")) {
+    return "Move feet first. Do not let the hands chase the shot.";
+  }
+  if (t.includes("trail leg") || d.includes("trail leg") || t.includes("back foot")) {
+    return "After penetration, immediately step your trail foot up under your hips before adjusting the finish.";
+  }
+
+  return "Restore structure first. Then continue the rep.";
+}
+
+function buildWhyItMatters(primary: VisionFinding | null, summary?: string) {
+  if (!primary) return "Run Vision again to generate a tighter correction summary.";
+
+  const text = firstGoodText(
+    primary.dashboard_detail,
+    primary.unstable,
+    primary.break_point,
+    primary.detail,
+    primary.short_detail,
+    summary
+  );
+
+  if (text) return compactSentence(text, 180);
+
+  return "This correction is costing structure and making the exchange easier to stop.";
+}
+
+function buildIfIgnored(primary: VisionFinding | null) {
+  if (!primary) return "You lose the exchange before the finish is established.";
+
+  const text = firstGoodText(
+    primary.if_ignored,
+    primary.break_point,
+    primary.short_detail
+  );
+
+  if (text) return compactSentence(text, 160);
+
+  return "Opponent gets the defensive answer before the finish is established.";
+}
+
+function buildTrainToday(
+  topCorrection: VisionFinding | null,
+  session: DailySession | null,
+  camp: SavedCamp | null
+) {
+  if (topCorrection?.train?.length) return topCorrection.train.slice(0, 4);
+  if (session?.blocks?.length) return session.blocks.slice(0, 4);
+
+  const title = String(topCorrection?.title || "").toLowerCase();
+
+  if (title.includes("hips")) {
+    return [
+      "10 min paused penetration steps with hips under shoulders.",
+      "10 min freeze-and-continue entries focused on posture.",
+      "10 min wall shots focused only on hip line and drive.",
+      "10 min light shadow reps on the same correction.",
+    ];
+  }
+
+  if (title.includes("hand") || title.includes("reach")) {
+    return [
+      "10 min feet-first entry reps.",
+      "10 min re-attack shots without reaching.",
+      "10 min hand discipline against light reaction defense.",
+      "10 min shadow reps with strict hand timing.",
+    ];
+  }
+
+  if (title.includes("trail leg") || title.includes("back foot")) {
+    return [
+      "10 min penetration-to-trail-foot recovery reps.",
+      "10 min freeze after the knee, then step the back foot up.",
+      "10 min finish chains focused only on base recovery.",
+      "10 min shadow reps on stepping the trail foot under the hips.",
+    ];
+  }
+
+  const primary = camp?.trainingFocus?.primary ?? [];
+  if (primary.length) return primary.slice(0, 4);
+
+  return [
+    "Build camp in Sensei.",
+    "Run one technical block instead of random rounds.",
+    "Carry one correction through the full session.",
+    "Retest the same issue after the session.",
+  ];
+}
+
+function buildCoachNotes(camp: SavedCamp | null, fuelLoaded: boolean) {
+  const notes: string[] = [];
+
+  if (camp?.directive?.bullets?.length) {
+    notes.push(...camp.directive.bullets.slice(0, 2));
+  }
+  if (camp?.control?.warnings?.length) {
+    notes.push(...camp.control.warnings.slice(0, 1));
+  }
+  if (!fuelLoaded) {
+    notes.push(
+      "No Fuel data loaded: training decisions are being made without nutrition or recovery context."
+    );
+  }
+
+  return notes.slice(0, 3);
+}
+
+function Badge({
+  children,
+  tone = "neutral",
+}: {
+  children: React.ReactNode;
+  tone?: "neutral" | "good" | "warn" | "bad";
+}) {
+  const cls =
+    tone === "good"
+      ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
+      : tone === "warn"
+      ? "border-amber-400/30 bg-amber-400/10 text-amber-100"
+      : tone === "bad"
+      ? "border-rose-400/30 bg-rose-400/10 text-rose-100"
+      : "border-white/10 bg-white/[0.03] text-white/70";
+
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border px-3 py-1 text-[11px] tracking-wide",
+        cls
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+function IOSCard({
+  title,
+  sub,
+  right,
+  children,
+  strong = false,
+}: {
+  title: string;
+  sub?: string;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+  strong?: boolean;
+}) {
+  return (
+    <section
+      className={cn(
+        "rounded-[28px] border p-4 shadow-[0_16px_50px_rgba(0,0,0,0.26)] md:p-5",
+        strong
+          ? "border-emerald-400/12 bg-gradient-to-br from-[#071a3b] via-[#030b18] to-[#020810]"
+          : "border-white/8 bg-white/[0.03]"
+      )}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-sm font-semibold text-white">{title}</div>
+          {sub ? <div className="mt-1 text-xs text-white/55">{sub}</div> : null}
+        </div>
+        {right}
+      </div>
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+function BulletList({
+  items,
+  tone = "emerald",
+  compact = false,
+}: {
+  items: string[];
+  tone?: "emerald" | "amber" | "rose";
+  compact?: boolean;
+}) {
+  const dotClass =
+    tone === "amber"
+      ? "bg-amber-300/80"
+      : tone === "rose"
+      ? "bg-rose-300/80"
+      : "bg-emerald-300/80";
+
+  return (
+    <ul className={cn("text-sm text-white/90", compact ? "space-y-1.5" : "space-y-2.5")}>
+      {items.map((item, i) => (
+        <li key={i} className="flex gap-2">
+          <span className={cn("mt-2 h-1.5 w-1.5 shrink-0 rounded-full", dotClass)} />
+          <span>{item}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function MiniStat({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+    return (
+      <div className="rounded-[22px] border border-white/10 bg-black/25 p-3">
+        <div className="text-[10px] uppercase tracking-[0.22em] text-white/45">{label}</div>
+        <div className="mt-2 text-sm font-semibold text-white">{value}</div>
+      </div>
+    );
+}
+
+function ActionButton({
+  href,
+  label,
+  strong = false,
+}: {
+  href: string;
+  label: string;
+  strong?: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      className={cn(
+        "rounded-[20px] border px-4 py-3 text-center text-sm transition",
+        strong
+          ? "border-emerald-400/20 bg-emerald-500/12 text-emerald-50 hover:bg-emerald-500/18"
+          : "border-white/10 bg-black/25 text-white hover:border-white/20"
+      )}
+    >
+      {label}
+    </Link>
+  );
 }
 
 export default function DashboardClient() {
@@ -242,6 +465,8 @@ export default function DashboardClient() {
   const [fuel, setFuel] = useState<FuelMemory | null>(null);
   const [weightLogs, setWeightLogs] = useState<WeightLog[]>([]);
   const [weightInput, setWeightInput] = useState("");
+  const [showSupporting, setShowSupporting] = useState(false);
+  const [showSystems, setShowSystems] = useState(false);
 
   useEffect(() => {
     const campData = readJson<SavedCamp>("disciplin_latest_camp");
@@ -262,34 +487,12 @@ export default function DashboardClient() {
 
   const currentWeight = getLatestWeight(weightLogs, profileCurrentWeight);
   const daysRemaining = daysUntil(fightDate);
+
   const weightStatus = buildWeightStatus({
     currentWeight,
     targetWeight,
     daysRemaining,
   });
-
-  const mission = useMemo(() => getMissionBlocks(camp), [camp]);
-
-  const corrections = useMemo(() => {
-    const findings = Array.isArray(vision?.findings) ? vision.findings : [];
-    return findings.slice(0, 3);
-  }, [vision]);
-
-  const coachNotes = useMemo(() => {
-    const notes: string[] = [];
-
-    if (camp?.directive?.bullets?.length) {
-      notes.push(...camp.directive.bullets.slice(0, 2));
-    }
-    if (camp?.control?.warnings?.length) {
-      notes.push(...camp.control.warnings.slice(0, 1));
-    }
-    if (camp?.control?.nextStep?.length) {
-      notes.push(...camp.control.nextStep.slice(0, 1));
-    }
-
-    return notes.slice(0, 4);
-  }, [camp]);
 
   const weightDifference =
     currentWeight !== null && typeof targetWeight === "number"
@@ -300,6 +503,32 @@ export default function DashboardClient() {
     currentWeight !== null && typeof targetWeight === "number"
       ? Math.max(0, Math.min(100, 100 - Math.max(0, currentWeight - targetWeight) * 8))
       : 0;
+
+  const findings = useMemo(
+    () => (Array.isArray(vision?.findings) ? vision.findings : []),
+    [vision]
+  );
+
+  const primaryCorrection = findings[0] ?? null;
+  const secondaryCorrections = findings.slice(1, 3);
+
+  const correctionInterrupt =
+    primaryCorrection?.interrupt ||
+    fallbackInterrupt(primaryCorrection?.title, primaryCorrection?.detail);
+
+  const fixNextRep =
+    primaryCorrection?.fix_next_rep ||
+    fallbackFixNextRep(primaryCorrection?.title, primaryCorrection?.detail);
+
+  const whyItMatters = buildWhyItMatters(primaryCorrection, vision?.summary);
+  const costIfIgnored = buildIfIgnored(primaryCorrection);
+
+  const executionBlocks = buildTrainToday(primaryCorrection, camp?.dailySession ?? null, camp);
+
+  const coachNotes = useMemo(
+    () => buildCoachNotes(camp, !!fuel?.score || !!fuel?.report),
+    [camp, fuel]
+  );
 
   function handleLogWeight() {
     const value = Number(weightInput);
@@ -318,357 +547,404 @@ export default function DashboardClient() {
     setWeightInput("");
   }
 
+  const sessionTitle = camp?.dailySession?.title || "Correction session";
+
+  const sessionMeta = camp?.dailySession
+    ? `${camp.dailySession.timingLabel} · Goal: ${camp.dailySession.goal}`
+    : "This session should revolve around one real correction, not variety.";
+
   return (
-    <main className="min-h-[calc(100vh-72px)] pt-24 pb-10">
-      <div className="mx-auto max-w-7xl px-4 md:px-6">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Badge tone="good">FIGHT CAMP COMMAND CENTER</Badge>
-            <span className="text-sm text-slate-200/80">
-              Daily operating screen for training, weight, correction, and action.
+    <main className="min-h-[calc(100vh-72px)] bg-[#020810] px-0 pb-8 pt-2 text-white">
+      <div className="mx-auto max-w-2xl space-y-4">
+        <IOSCard
+          title="Dashboard"
+          sub="Fix one thing. Train one thing. Ignore everything else."
+          right={<Badge tone={statusTone(weightStatus)}>{weightStatus}</Badge>}
+          strong
+        >
+          <div className="flex flex-wrap gap-2">
+            <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] text-white/70">
+              Weight class: <span className="text-white">{weightClass}</span>
             </span>
+            {camp?.dailySession ? (
+              <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-[11px] text-emerald-100">
+                Today: {camp.dailySession.durationMin} min
+              </span>
+            ) : null}
           </div>
+        </IOSCard>
 
-          <div className="flex items-center gap-2">
-            <Badge tone={statusTone(weightStatus)}>{weightStatus}</Badge>
-            <Link
-              href="/sensei"
-              className="rounded-full border border-slate-700/70 bg-slate-950/30 px-3 py-1.5 text-xs text-slate-200/80 hover:bg-slate-900/40"
-            >
-              Open Sensei →
-            </Link>
-          </div>
-        </div>
+        <IOSCard
+          title="Fix this now"
+          sub="This is the session. Everything else is secondary."
+          right={
+            primaryCorrection ? (
+              <Badge tone={severityTone(primaryCorrection.severity)}>
+                {primaryCorrection.severity}
+              </Badge>
+            ) : (
+              <Badge tone="warn">No clip loaded</Badge>
+            )
+          }
+          strong
+        >
+          {primaryCorrection ? (
+            <div className="space-y-4">
+              <div className="rounded-[24px] border border-rose-500/20 bg-[#060912] p-4">
+                <div className="text-[11px] uppercase tracking-[0.28em] text-rose-200/70">
+                  Primary command
+                </div>
 
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-          <div className="space-y-6 xl:col-span-8">
-            <Card
-              title="Camp status"
-              sub="What matters immediately."
-              right={<Badge tone={statusTone(weightStatus)}>{weightStatus}</Badge>}
-            >
-              <div className="grid gap-4 md:grid-cols-4">
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Fight date</div>
-                  <div className="mt-2 text-sm font-semibold text-slate-50">
-                    {fightDate ?? "No fight scheduled"}
+                <div className="mt-3 text-5xl font-bold tracking-tight leading-[1.02] text-white md:text-6xl">
+                  {primaryCorrection.title}
+                </div>
+
+                <div className="mt-4 rounded-[22px] border border-rose-500/20 bg-black/20 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-rose-200/80">
+                    Stop command
                   </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Days remaining</div>
-                  <div className="mt-2 text-sm font-semibold text-slate-50">
-                    {daysRemaining !== null ? `${daysRemaining} days` : "—"}
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Weight class</div>
-                  <div className="mt-2 text-sm font-semibold text-slate-50">{weightClass}</div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Current weight</div>
-                  <div className="mt-2 text-sm font-semibold text-slate-50">
-                    {currentWeight !== null ? `${currentWeight} kg` : "Not logged"}
+                  <div className="mt-2 text-xl font-semibold text-rose-50">
+                    {correctionInterrupt}
                   </div>
                 </div>
               </div>
-            </Card>
 
-            <Card
-              title="Today’s mission"
-              sub="Here is your mission for today."
-              right={
-                camp?.dailySession ? (
-                  <Badge tone="good">{camp.dailySession.durationMin} min</Badge>
-                ) : (
-                  <Badge tone="warn">Build camp</Badge>
-                )
-              }
-            >
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-emerald-200/80">Striking</div>
-                  <div className="mt-2 text-sm text-slate-100">{mission.striking}</div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-[22px] border border-white/10 bg-black/25 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-white/45">
+                    Why it matters
+                  </div>
+                  <div className="mt-3 text-lg leading-8 text-white/90">
+                    {whyItMatters}
+                  </div>
                 </div>
 
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Grappling</div>
-                  <div className="mt-2 text-sm text-slate-100">{mission.grappling}</div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Conditioning</div>
-                  <div className="mt-2 text-sm text-slate-100">{mission.conditioning}</div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Recovery</div>
-                  <div className="mt-2 text-sm text-slate-100">{mission.recovery}</div>
+                <div className="rounded-[22px] border border-emerald-400/20 bg-emerald-500/[0.07] p-4">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-emerald-200/80">
+                    Fix next rep
+                  </div>
+                  <div className="mt-3 text-2xl font-semibold leading-10 text-emerald-50">
+                    {fixNextRep}
+                  </div>
                 </div>
               </div>
 
-              {camp?.dailySession ? (
-                <div className="mt-4 rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">
-                        Today’s session
-                      </div>
-                      <div className="mt-2 text-sm font-semibold text-slate-50">
-                        {camp.dailySession.title}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-300/70">
-                        {camp.dailySession.timingLabel} · Goal: {camp.dailySession.goal}
-                      </div>
-                    </div>
-                    <Badge tone="good">{camp.dailySession.durationMin} min</Badge>
-                  </div>
-
-                  <div className="mt-3">
-                    <Bullets items={camp.dailySession.blocks} />
-                  </div>
+              <div className="rounded-[22px] border border-white/10 bg-black/25 p-4">
+                <div className="text-[11px] uppercase tracking-[0.22em] text-white/45">
+                  If ignored
                 </div>
-              ) : null}
-            </Card>
+                <div className="mt-3 text-lg leading-8 text-white/80">
+                  {costIfIgnored}
+                </div>
+              </div>
 
-            <Card
-              title="Yesterday’s corrections"
-              sub="Strict reminders from recent analysis."
-              right={
-                vision?.clipLabel ? (
-                  <Badge tone="good">{vision.clipLabel}</Badge>
-                ) : (
-                  <Badge tone="warn">No recent clip</Badge>
-                )
-              }
+              <div className="grid gap-3 sm:grid-cols-2">
+                <ActionButton href="/sensei" label="Begin session" strong />
+                <ActionButton href="/sensei-vision" label="Verify fix" />
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-[22px] border border-dashed border-white/10 bg-black/20 p-5 text-sm text-white/60">
+              No recent Vision analysis. Upload a clip in Sensei Vision so the system can lock onto one real correction.
+            </div>
+          )}
+        </IOSCard>
+
+        <IOSCard
+          title="Today’s work"
+          sub="Do this. Do not chase variety."
+          right={
+            camp?.dailySession ? (
+              <Badge tone="good">{camp.dailySession.durationMin} min</Badge>
+            ) : (
+              <Badge tone="warn">Build camp</Badge>
+            )
+          }
+        >
+          <div className="space-y-4">
+            <div className="rounded-[22px] border border-emerald-400/18 bg-emerald-500/[0.05] p-4">
+              <div className="text-base font-semibold text-white">{sessionTitle}</div>
+              <div className="mt-1 text-xs text-white/60">{sessionMeta}</div>
+            </div>
+
+            <BulletList items={executionBlocks} />
+          </div>
+        </IOSCard>
+
+        <IOSCard
+          title="System layer"
+          sub="Fuel, weight, notes, and camp control."
+          right={
+            <button
+              type="button"
+              onClick={() => setShowSystems((v) => !v)}
+              className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] text-white/75 transition hover:border-white/20 hover:text-white"
             >
-              {corrections.length ? (
+              {showSystems ? "Hide" : "Show"}
+            </button>
+          }
+        >
+          {showSystems ? (
+            <div className="space-y-4">
+              <IOSCard
+                title="Fuel status"
+                sub="Nutrition support for current camp load."
+                right={
+                  fuel?.score !== undefined ? (
+                    <Badge tone={getFuelTone(fuel.score)}>Score {Math.round(fuel.score)}</Badge>
+                  ) : (
+                    <Badge tone="warn">Missing</Badge>
+                  )
+                }
+              >
                 <div className="space-y-3">
-                  {corrections.map((item, i) => (
-                    <div
-                      key={item.id ?? i}
-                      className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold text-slate-50">{item.title}</div>
-                          <div className="mt-2 text-sm text-slate-300/80">{item.detail}</div>
-                        </div>
-                        <Badge
-                          tone={
-                            item.severity === "HIGH"
-                              ? "bad"
-                              : item.severity === "MEDIUM"
-                              ? "warn"
-                              : "good"
-                          }
-                        >
-                          {item.severity}
-                        </Badge>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-2xl border border-dashed border-slate-800/70 bg-slate-950/20 p-6 text-sm text-slate-300/70">
-                  No recent corrections. Upload a clip in Sensei Vision to generate strict correction reminders.
-                </div>
-              )}
-            </Card>
-          </div>
+                  <div className="rounded-[20px] border border-white/10 bg-black/25 p-4">
+                    <div className="text-sm text-white/90">{fuelStatusLine(fuel?.score)}</div>
+                  </div>
 
-          <div className="space-y-6 xl:col-span-4">
-            <Card
-              title="Fuel status"
-              sub="Nutrition readiness for current camp load."
-              right={
-                fuel?.score !== undefined ? (
-                  <Badge tone={getFuelTone(fuel.score)}>Score {Math.round(fuel.score)}</Badge>
+                  <div className="rounded-[20px] border border-white/10 bg-black/25 p-4">
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-white/45">
+                      Latest Fuel note
+                    </div>
+                    <div className="mt-2 text-sm leading-6 text-white/75">
+                      {fuelSnippet(fuel?.report)}
+                    </div>
+                  </div>
+
+                  <ActionButton href="/fuel" label="Open Fuel AI" strong />
+                </div>
+              </IOSCard>
+
+              <IOSCard
+                title="Weight status"
+                sub="Trajectory toward fight weight."
+                right={<Badge tone={statusTone(weightStatus)}>{weightStatus}</Badge>}
+              >
+                <div className="space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <MiniStat
+                      label="Current"
+                      value={currentWeight !== null ? `${currentWeight} kg` : "Not logged"}
+                    />
+                    <MiniStat
+                      label="Target"
+                      value={typeof targetWeight === "number" ? `${targetWeight} kg` : "Not set"}
+                    />
+                    <MiniStat
+                      label="Difference"
+                      value={weightDifference !== null ? `${weightDifference.toFixed(1)} kg` : "—"}
+                    />
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-white/45">
+                      Trajectory
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-full border border-white/10 bg-black/40">
+                      <div
+                        className={cn(
+                          "h-full rounded-full transition-all",
+                          weightStatus === "On Track"
+                            ? "bg-emerald-400/80"
+                            : weightStatus === "Slightly Behind"
+                            ? "bg-amber-400/80"
+                            : weightStatus === "Off Track"
+                            ? "bg-rose-400/80"
+                            : "bg-white/20"
+                        )}
+                        style={{ width: `${progressPct}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-[20px] border border-white/10 bg-black/25 p-4">
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-white/45">
+                      Log weight
+                    </div>
+                    <div className="mt-3 flex gap-2">
+                      <input
+                        value={weightInput}
+                        onChange={(e) => setWeightInput(e.target.value)}
+                        placeholder="e.g. 68.2"
+                        className="w-full rounded-[18px] border border-white/10 bg-black/30 px-4 py-3 text-sm text-white placeholder:text-white/35 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
+                      />
+                      <button
+                        onClick={handleLogWeight}
+                        className="rounded-[18px] bg-emerald-400 px-4 py-3 text-sm font-medium text-[#041026] hover:bg-emerald-300"
+                      >
+                        Log
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </IOSCard>
+
+              <IOSCard
+                title="Coach notes"
+                sub="Short carryover notes for today."
+                right={<Badge tone="neutral">Daily</Badge>}
+              >
+                {coachNotes.length ? (
+                  <BulletList items={coachNotes} compact />
                 ) : (
-                  <Badge tone="warn">Missing</Badge>
-                )
-              }
-            >
-              <div className="space-y-4">
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">
-                      Nutrition status
-                    </div>
-                    <Badge tone={fuel?.score !== undefined ? getFuelTone(fuel.score) : "neutral"}>
-                      {fuel?.score !== undefined ? "Connected" : "No report"}
-                    </Badge>
+                  <div className="text-sm text-white/60">
+                    No coach notes yet. Build a camp in Sensei first.
                   </div>
-                  <div className="mt-3 text-sm text-slate-100">
-                    {fuelStatusLine(fuel?.score)}
-                  </div>
+                )}
+              </IOSCard>
+
+              <IOSCard
+                title="Mission state"
+                sub="Today’s command state."
+                right={<Badge tone={statusTone(weightStatus)}>{weightStatus}</Badge>}
+              >
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <MiniStat
+                    label="Directive"
+                    value={compactSentence(
+                      primaryCorrection?.title || camp?.directive?.title || "No primary correction yet",
+                      40
+                    )}
+                  />
+                  <MiniStat
+                    label="Days remaining"
+                    value={daysRemaining !== null ? `${daysRemaining} days` : "—"}
+                  />
+                  <MiniStat label="Fight date" value={fightDate ?? "No fight scheduled"} />
+                  <MiniStat
+                    label="Current weight"
+                    value={currentWeight !== null ? `${currentWeight} kg` : "Not logged"}
+                  />
                 </div>
+              </IOSCard>
 
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">
-                    Latest Fuel note
-                  </div>
-                  <div className="mt-3 text-sm leading-6 text-slate-300/85">
-                    {fuelSnippet(fuel?.report)}
-                  </div>
-                </div>
-
-                <Link
-                  href="/fuel"
-                  className="block rounded-2xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-100 hover:bg-emerald-500/10"
-                >
-                  Open Fuel AI
-                </Link>
-              </div>
-            </Card>
-
-            <Card
-              title="Weight tracking"
-              sub="Trajectory toward fight weight."
-              right={<Badge tone={statusTone(weightStatus)}>{weightStatus}</Badge>}
-            >
-              <div className="space-y-4">
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                    <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Current weight</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-50">
-                      {currentWeight !== null ? `${currentWeight} kg` : "Not logged"}
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                    <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Target weight</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-50">
-                      {typeof targetWeight === "number" ? `${targetWeight} kg` : "Not set"}
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                    <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Difference</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-50">
-                      {weightDifference !== null ? `${weightDifference.toFixed(1)} kg` : "—"}
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                    <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Days remaining</div>
-                    <div className="mt-2 text-sm font-semibold text-slate-50">
-                      {daysRemaining !== null ? `${daysRemaining}` : "—"}
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <div className="mb-2 text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Trajectory</div>
-                  <div className="h-2 w-full overflow-hidden rounded-full border border-slate-800/60 bg-slate-950/60">
-                    <div
-                      className={cn(
-                        "h-full rounded-full transition-all",
-                        weightStatus === "On Track"
-                          ? "bg-emerald-400/80"
-                          : weightStatus === "Slightly Behind"
-                          ? "bg-amber-400/80"
-                          : weightStatus === "Off Track"
-                          ? "bg-rose-400/80"
-                          : "bg-slate-700"
-                      )}
-                      style={{ width: `${progressPct}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400/70">Log weight</div>
-                  <div className="mt-3 flex gap-2">
-                    <input
-                      value={weightInput}
-                      onChange={(e) => setWeightInput(e.target.value)}
-                      placeholder="e.g. 68.2"
-                      className="w-full rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
-                    />
+              <IOSCard
+                title="Supporting issues"
+                sub="These are real, but they do not override the main correction."
+                right={
+                  secondaryCorrections.length ? (
                     <button
-                      onClick={handleLogWeight}
-                      className="rounded-2xl bg-emerald-400/95 px-4 py-3 text-sm font-medium text-slate-950 hover:bg-emerald-300"
+                      type="button"
+                      onClick={() => setShowSupporting((v) => !v)}
+                      className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] text-white/75 transition hover:border-white/20 hover:text-white"
                     >
-                      Log
+                      {showSupporting ? "Hide" : `Show ${secondaryCorrections.length}`}
                     </button>
+                  ) : (
+                    <Badge tone="neutral">None</Badge>
+                  )
+                }
+              >
+                {secondaryCorrections.length ? (
+                  <div className="space-y-3">
+                    {showSupporting ? (
+                      <>
+                        {secondaryCorrections.map((item, i) => {
+                          const shortText =
+                            item.short_detail ||
+                            item.unstable ||
+                            item.break_point ||
+                            item.good ||
+                            "Secondary issue detected.";
+
+                          return (
+                            <div
+                              key={item.id ?? i}
+                              className="rounded-[20px] border border-white/10 bg-black/25 p-4"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="text-sm font-semibold text-white">{item.title}</div>
+                                  <div className="mt-2 text-sm text-white/70">
+                                    {compactSentence(shortText, 140)}
+                                  </div>
+                                </div>
+                                <Badge tone={severityTone(item.severity)}>{item.severity}</Badge>
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        <Link
+                          href="/sensei-vision"
+                          className="inline-flex text-xs text-emerald-300 hover:text-emerald-200"
+                        >
+                          Open full Vision report →
+                        </Link>
+                      </>
+                    ) : (
+                      <div className="text-sm text-white/60">
+                        Secondary problems are hidden until the main correction is understood.
+                      </div>
+                    )}
                   </div>
+                ) : (
+                  <div className="text-sm text-white/60">
+                    No secondary issues loaded.
+                  </div>
+                )}
+              </IOSCard>
+
+              <IOSCard
+                title="Quick actions"
+                sub="Use the important tools fast."
+                right={<Badge tone="good">Actions</Badge>}
+              >
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <ActionButton href="/sensei" label="Begin session" strong />
+                  <ActionButton href="/sensei-vision" label="Upload sparring clip" />
+                  <ActionButton href="/fuel" label="Check Fuel" />
                 </div>
-              </div>
-            </Card>
+              </IOSCard>
 
-            <Card
-              title="Coach / Sensei notes"
-              sub="Short notes for today."
-              right={<Badge tone="neutral">Daily notes</Badge>}
-            >
-              {coachNotes.length ? (
-                <Bullets items={coachNotes} />
-              ) : (
-                <div className="text-sm text-slate-300/70">
-                  No coach notes yet. Build a camp in Sensei first.
-                </div>
-              )}
-            </Card>
-
-            <Card
-              title="Quick actions"
-              sub="Use the most important tools fast."
-              right={<Badge tone="good">Actions</Badge>}
-            >
-              <div className="grid gap-3">
-                <Link
-                  href="/sensei-vision"
-                  className="rounded-2xl border border-slate-800/60 bg-slate-950/25 px-4 py-3 text-sm text-slate-100 hover:bg-slate-900/35"
+              {camp?.control ? (
+                <IOSCard
+                  title="Camp control"
+                  sub="Load, warnings, and next step."
+                  right={
+                    <Badge tone={badgeToneForLoad(camp.control.trainingLoad)}>
+                      {camp.control.trainingLoad}
+                    </Badge>
+                  }
                 >
-                  Upload Sparring Clip
-                </Link>
+                  <div className="grid gap-4">
+                    <div className="grid grid-cols-3 gap-3">
+                      <MiniStat label="Load" value={camp.control.trainingLoad} />
+                      <MiniStat label="Warnings" value={String(camp.control.warnings.length)} />
+                      <MiniStat label="Next steps" value={String(camp.control.nextStep.length)} />
+                    </div>
 
-                <Link
-                  href="/report"
-                  className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-100 hover:bg-emerald-500/10"
-                >
-                  View Fighter Report Card
-                </Link>
+                    {camp.control.warnings.length ? (
+                      <div className="rounded-[20px] border border-white/10 bg-black/25 p-4">
+                        <div className="text-[11px] uppercase tracking-[0.22em] text-white/45">
+                          Warnings
+                        </div>
+                        <div className="mt-3">
+                          <BulletList items={camp.control.warnings.slice(0, 2)} tone="amber" compact />
+                        </div>
+                      </div>
+                    ) : null}
 
-                <button
-                  onClick={() => {
-                    const el = document.querySelector<HTMLInputElement>(
-                      'input[placeholder="e.g. 68.2"]'
-                    );
-                    el?.focus();
-                  }}
-                  className="rounded-2xl border border-slate-800/60 bg-slate-950/25 px-4 py-3 text-left text-sm text-slate-100 hover:bg-slate-900/35"
-                >
-                  Log Weight
-                </button>
-
-                <Link
-                  href="/sensei"
-                  className="rounded-2xl border border-slate-800/60 bg-slate-950/25 px-4 py-3 text-sm text-slate-100 hover:bg-slate-900/35"
-                >
-                  Start Today’s Session
-                </Link>
-
-                <Link
-                  href="/sensei"
-                  className="rounded-2xl border border-slate-800/60 bg-slate-950/25 px-4 py-3 text-sm text-slate-100 hover:bg-slate-900/35"
-                >
-                  Ask Sensei
-                </Link>
-
-                <Link
-                  href="/sensei"
-                  className="rounded-2xl border border-slate-800/60 bg-slate-950/25 px-4 py-3 text-sm text-slate-100 hover:bg-slate-900/35"
-                >
-                  View Camp Plan
-                </Link>
-              </div>
-            </Card>
-          </div>
-        </div>
+                    {camp.control.nextStep.length ? (
+                      <div className="rounded-[20px] border border-white/10 bg-black/25 p-4">
+                        <div className="text-[11px] uppercase tracking-[0.22em] text-white/45">
+                          Next step
+                        </div>
+                        <div className="mt-2 text-sm text-white/85">
+                          {compactSentence(camp.control.nextStep[0], 140)}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </IOSCard>
+              ) : null}
+            </div>
+          ) : (
+            <div className="text-sm text-white/60">
+              System layer is hidden until you need it.
+            </div>
+          )}
+        </IOSCard>
       </div>
     </main>
   );
