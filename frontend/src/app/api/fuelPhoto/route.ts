@@ -2,8 +2,8 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { z } from "zod";
-import { supabaseServer } from "../../../lib/supabaseServer";
-import type { FuelOutput } from "../../../lib/fuelTypes";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import type { FuelOutput } from "@/lib/fuelTypes";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -72,12 +72,12 @@ function systemRules() {
     "Return STRICT JSON only that matches the schema. No markdown. No extra keys.",
     "Use BOTH the image and the meal text.",
     "Macros MUST be ranges.",
-    "If portions/ingredients are unclear, ask 1–3 questions instead of pretending confidence.",
+    "If portions/ingredients are unclear, ask 1-3 questions instead of pretending confidence.",
     "Be strict and specific. Short, coach-like report.",
   ].join("\n");
 }
 
-function buildPrompt(ingredients: string, fighter: any, training: any, followupsId: string) {
+function buildPrompt(ingredients: string, fighter: unknown, training: unknown, followupsId: string) {
   return [
     systemRules(),
     "",
@@ -99,33 +99,46 @@ function buildPrompt(ingredients: string, fighter: any, training: any, followups
   ].join("\n");
 }
 
-// Reliable extractor for Responses API outputs
-function getResponseText(resp: any): string {
-  const direct = String(resp?.output_text ?? "").trim();
+function getResponseText(resp: unknown): string {
+  const record = resp as Record<string, any>;
+  const direct = String(record?.output_text ?? "").trim();
   if (direct) return direct;
 
-  const out = resp?.output;
+  const out = record?.output;
   if (Array.isArray(out)) {
     for (const item of out) {
       const content = item?.content;
       if (Array.isArray(content)) {
         for (const c of content) {
           if (typeof c?.text === "string" && c.text.trim()) return c.text.trim();
-          const tt = c?.content?.[0]?.text;
-          if (typeof tt === "string" && tt.trim()) return tt.trim();
+          const nestedText = c?.content?.[0]?.text;
+          if (typeof nestedText === "string" && nestedText.trim()) return nestedText.trim();
         }
       }
     }
   }
+
   return "";
+}
+
+function safeJsonParse(value?: string) {
+  if (!value) return {};
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
 }
 
 export async function POST(req: Request) {
   try {
-    const sb = await supabaseServer();
+    const sb = await createSupabaseServerClient();
     const { data: auth } = await sb.auth.getUser();
     const user = auth?.user;
-    if (!user) return NextResponse.json({ ok: false, error: "Not authenticated." }, { status: 401 });
+
+    if (!user) {
+      return NextResponse.json({ ok: false, error: "Not authenticated." }, { status: 401 });
+    }
 
     const form = await req.formData();
     const image = form.get("image");
@@ -147,35 +160,25 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "Missing image file." }, { status: 400 });
     }
 
-    let fighter: any = {};
-    let training: any = {};
-    try {
-      fighter = parsed.data.fighter ? JSON.parse(parsed.data.fighter) : {};
-    } catch {}
-    try {
-      training = parsed.data.training ? JSON.parse(parsed.data.training) : {};
-    } catch {}
-
     const followupsId = crypto.randomUUID();
-
-    // ✅ Convert uploaded File -> base64 data URL (Responses API expects image_url)
-    const ab = await image.arrayBuffer();
-    const base64 = Buffer.from(ab).toString("base64");
+    const buffer = Buffer.from(await image.arrayBuffer());
     const mime = image.type || "image/webp";
-    const dataUrl = `data:${mime};base64,${base64}`;
-
-    const prompt = buildPrompt(parsed.data.ingredients, fighter, training, followupsId);
+    const dataUrl = `data:${mime};base64,${buffer.toString("base64")}`;
+    const prompt = buildPrompt(
+      parsed.data.ingredients,
+      safeJsonParse(parsed.data.fighter),
+      safeJsonParse(parsed.data.training),
+      followupsId
+    );
 
     const resp = await openai.responses.create({
-      // Use whatever model you want here.
-      // If your account doesn't have gpt-5.1, swap to a vision-capable model you do have.
       model: "gpt-5.1",
       input: [
         {
           role: "user",
           content: [
             { type: "input_text", text: prompt },
-            { type: "input_image", image_url: dataUrl }, // ✅ correct
+            { type: "input_image", image_url: dataUrl },
           ],
         },
       ],
@@ -212,13 +215,13 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ ok: true, ...out });
-  } catch (err: any) {
+  } catch (err: unknown) {
     const msg =
-      typeof err?.message === "string"
+      err instanceof Error
         ? err.message
         : typeof err?.toString === "function"
-        ? err.toString()
-        : "FuelPhoto backend crashed.";
+          ? err.toString()
+          : "FuelPhoto backend crashed.";
 
     console.error("FuelPhoto crashed:", err);
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
