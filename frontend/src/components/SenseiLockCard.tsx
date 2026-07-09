@@ -2,14 +2,19 @@
 
 import type { DirectiveState } from "@/lib/disciplinLock";
 
+type SenseiLockDirectiveState = DirectiveState & {
+  severity?: string | null;
+  title?: string | null;
+};
+
 type Props = {
-  directiveState: DirectiveState | null;
+  directiveState: SenseiLockDirectiveState | null;
   activeDirective?: string | null;
   fixNextRep?: string | null;
   onTrack?: boolean;
 };
 
-function severityTone(severity?: DirectiveState["severity"]) {
+function severityTone(severity?: string | null) {
   if (severity === "LOW") {
     return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
   }

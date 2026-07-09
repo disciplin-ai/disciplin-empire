@@ -660,7 +660,7 @@ export default function SenseiClient() {
                 deliveryMode: inferDeliveryMode(question),
                 responseMode: cleanInput(data?.responseMode),
                 stateUpdate: {
-                  psychologicalTrigger,
+                  psychologicalTrigger: psychologyTrigger,
                   gameplanFocus,
                   activeCorrection: nextDirective,
                   nextDecision,

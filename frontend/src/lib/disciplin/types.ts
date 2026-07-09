@@ -10,7 +10,117 @@ export type DirectiveProgress = {
   updatedAt?: string;
 };
 
-export type FuelLockInput = {
+
+export type FighterProfile = {
+  fighterId: string;
+  name?: string;
+  baseArt?: string;
+  stance?: string;
+  campGoal?: string;
+  targetFightWeightKg?: number | null;
+};
+
+export type VisionFinding = {
+  id: string;
+  fighterId: string;
+  sourceType?: string;
+  sport?: string;
+  technique?: string;
+  finding: string;
+  correction: string;
+  severity?: "LOW" | "MEDIUM" | "HIGH" | "low" | "medium" | "high" | string;
+  createdAt: string;
+};
+
+export type FuelLog = {
+  id: string;
+  fighterId: string;
+  score?: number | null;
+  fuelScore?: number | null;
+  rating?: string | null;
+  decision?: string | null;
+  report?: string | null;
+  createdAt: string;
+};
+
+export type WeightLog = {
+  id: string;
+  fighterId: string;
+  weightKg: number;
+  loggedAt: string;
+};
+
+export type GymRecommendation = {
+  id: string;
+  fighterId: string;
+  gymId?: string;
+  gymName: string;
+  reason: string;
+  score: number;
+  createdAt: string;
+};
+
+export type CampAlert = {
+  id: string;
+  fighterId: string;
+  type?: string;
+  message: string;
+  severity?: "LOW" | "MEDIUM" | "HIGH" | string;
+  createdAt: string;
+};
+
+export type WeightStatus = {
+  latestWeightKg: number | null;
+  targetWeightKg: number | null;
+  deltaKg: number | null;
+  weeklyTrendKg: number | null;
+  projection: "on-track" | "off-track" | "unknown";
+};
+
+export type DailySession = {
+  title: string;
+  objective: string;
+  blocks: Array<{
+    title: string;
+    durationMin: number;
+    notes: string;
+  }>;
+};
+
+
+export type SenseiIntent =
+  | "why-directive"
+  | "generate-session"
+  | "mobility-session"
+  | "why-gym"
+  | "weight-check"
+  | "vision-followup"
+  | "fuel-followup"
+  | "general";
+
+export type SenseiResponse = {
+  directive: string;
+  correction: string;
+  drill: string;
+  explanation?: string;
+  session?: DailySession;
+  optionalGymSupport?: string;
+};export type CampState = {
+  fighterId: string;
+  directive: string;
+  correction: string;
+  drill: string;
+  priorityFocus: string[];
+  dailyChecklist: string[];
+  todaysSession: DailySession;
+  lastCorrections: VisionFinding[];
+  latestFuelLog: FuelLog | null;
+  latestWeightLog: WeightLog | null;
+  weightStatus: WeightStatus;
+  gymRecommendations: GymRecommendation[];
+  alerts: CampAlert[];
+  generatedAt: string;
+};export type FuelLockInput = {
   present?: boolean;
   score?: number | null;
   rating?: string | null;
