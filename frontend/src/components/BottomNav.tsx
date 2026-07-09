@@ -7,43 +7,87 @@ function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
-const NAV_ITEMS = [
-  { href: "/dashboard", label: "Home" },
-  { href: "/sensei-vision", label: "Vision" },
-  { href: "/sensei", label: "Sensei" },
-  { href: "/fuel", label: "Fuel" },
-  { href: "/profile", label: "Profile" },
+const items = [
+  {
+    href: "/sensei-vision",
+    label: "Vision",
+    symbol: "⌖",
+  },
+  {
+    href: "/sensei",
+    label: "Sensei",
+    symbol: "⌘",
+  },
+  {
+    href: "/fuel",
+    label: "Fuel",
+    symbol: "ϟ",
+  },
+  {
+    href: "/dashboard",
+    label: "Dashboard",
+    symbol: "◎",
+  },
+  {
+    href: "/legal/safety",
+    label: "Safety/Data",
+    symbol: "◇",
+  },
 ];
+
+function isActive(pathname: string | null, href: string) {
+  if (!pathname) return href === "/dashboard";
+
+  if (href === "/dashboard") {
+    return pathname === "/" || pathname.startsWith("/dashboard");
+  }
+
+  if (href === "/legal/safety") {
+    return pathname.startsWith("/legal");
+  }
+
+  return pathname.startsWith(href);
+}
 
 export default function BottomNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="app-bottom-nav">
-      <div className="mx-auto grid h-full max-w-xl grid-cols-5 items-center px-2">
-        {NAV_ITEMS.map((item) => {
-          const active =
-            pathname === item.href ||
-            (item.href !== "/dashboard" && pathname?.startsWith(item.href));
+    <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-[#020810]/92 px-2 pb-[max(env(safe-area-inset-bottom),8px)] pt-2 backdrop-blur-xl">
+      <div className="mx-auto grid max-w-4xl grid-cols-5">
+        {items.map((item) => {
+          const active = isActive(pathname, item.href);
 
           return (
             <Link
               key={item.href}
               href={item.href}
-              className={cn(
-                "flex h-full flex-col items-center justify-center rounded-2xl px-2 text-[11px] font-medium transition",
-                active
-                  ? "text-emerald-200"
-                  : "text-white/50 hover:text-white/80"
-              )}
+              className="group flex min-w-0 flex-col items-center justify-center gap-1 py-1.5 text-center transition active:scale-[0.96]"
             >
-              <span
+              <div
                 className={cn(
-                  "mb-1 h-1.5 w-1.5 rounded-full transition",
-                  active ? "bg-emerald-300" : "bg-white/15"
+                  "text-[17px] font-semibold leading-none transition",
+                  active ? "text-white" : "text-white/38 group-hover:text-white/70"
+                )}
+              >
+                {item.symbol}
+              </div>
+
+              <div
+                className={cn(
+                  "max-w-full truncate text-[10px] font-semibold leading-none transition",
+                  active ? "text-white" : "text-white/42 group-hover:text-white/70"
+                )}
+              >
+                {item.label}
+              </div>
+
+              <div
+                className={cn(
+                  "mt-0.5 h-1 w-1 rounded-full transition",
+                  active ? "bg-white" : "bg-transparent"
                 )}
               />
-              <span>{item.label}</span>
             </Link>
           );
         })}

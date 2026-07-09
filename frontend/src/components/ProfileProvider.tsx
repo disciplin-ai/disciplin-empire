@@ -21,6 +21,8 @@ export type DietType =
   | "pescatarian"
   | "keto";
 
+export type CoachingStyle = "Direct" | "Tactical" | "Encouraging" | "Brutal";
+
 export type FighterProfile = {
   name?: string;
   age?: string;
@@ -32,19 +34,36 @@ export type FighterProfile = {
 
   yearsTraining?: string;
   competitionLevel?: string;
+  competitionStatus?: string;
+  currentPhase?: string;
   recentCamp?: string;
   campGoal?: string;
 
   bodyType?: string;
   paceStyle?: string;
   pressurePreference?: string;
+  fighterArchetype?: string;
   strengths?: string;
   weaknesses?: string;
+
+  currentFocus?: string;
+  activeConstraints?: string[];
+  coachingStyle?: CoachingStyle;
+
+  currentCorrection?: string;
+  currentLock?: string;
+  completedCorrections?: string[];
+  progressionHistory?: string[];
 
   availability?: string;
   injuryHistory?: string;
   hardBoundaries?: string;
   lifeLoad?: string;
+
+  gym?: string;
+  trainingFrequency?: string;
+  mainPartners?: string[];
+  competitionGoals?: string;
 
   scheduleNotes?: string;
   boundariesNotes?: string;
@@ -53,6 +72,9 @@ export type FighterProfile = {
   weightClass?: string;
   currentWeight?: number;
   targetWeight?: number;
+  sleep?: string;
+  readiness?: string;
+  currentStatus?: string;
 
   dietType?: DietType;
   allergies?: string[];
@@ -117,6 +139,14 @@ function normalizeDietType(value: unknown): DietType | undefined {
   return allowed.includes(value as DietType) ? (value as DietType) : undefined;
 }
 
+function normalizeCoachingStyle(value: unknown): CoachingStyle | undefined {
+  const allowed: CoachingStyle[] = ["Direct", "Tactical", "Encouraging", "Brutal"];
+  if (typeof value !== "string") return undefined;
+  return allowed.includes(value as CoachingStyle)
+    ? (value as CoachingStyle)
+    : undefined;
+}
+
 function normalizeProfile(raw: unknown): FighterProfile {
   const input = (raw ?? {}) as Record<string, unknown>;
 
@@ -131,19 +161,36 @@ function normalizeProfile(raw: unknown): FighterProfile {
 
     yearsTraining: normalizeOptionalString(input.yearsTraining),
     competitionLevel: normalizeOptionalString(input.competitionLevel),
+    competitionStatus: normalizeOptionalString(input.competitionStatus),
+    currentPhase: normalizeOptionalString(input.currentPhase),
     recentCamp: normalizeOptionalString(input.recentCamp),
     campGoal: normalizeOptionalString(input.campGoal),
 
     bodyType: normalizeOptionalString(input.bodyType),
     paceStyle: normalizeOptionalString(input.paceStyle),
     pressurePreference: normalizeOptionalString(input.pressurePreference),
+    fighterArchetype: normalizeOptionalString(input.fighterArchetype),
     strengths: normalizeOptionalString(input.strengths),
     weaknesses: normalizeOptionalString(input.weaknesses),
+
+    currentFocus: normalizeOptionalString(input.currentFocus),
+    activeConstraints: normalizeStringArray(input.activeConstraints),
+    coachingStyle: normalizeCoachingStyle(input.coachingStyle),
+
+    currentCorrection: normalizeOptionalString(input.currentCorrection),
+    currentLock: normalizeOptionalString(input.currentLock),
+    completedCorrections: normalizeStringArray(input.completedCorrections),
+    progressionHistory: normalizeStringArray(input.progressionHistory),
 
     availability: normalizeOptionalString(input.availability),
     injuryHistory: normalizeOptionalString(input.injuryHistory),
     hardBoundaries: normalizeOptionalString(input.hardBoundaries),
     lifeLoad: normalizeOptionalString(input.lifeLoad),
+
+    gym: normalizeOptionalString(input.gym),
+    trainingFrequency: normalizeOptionalString(input.trainingFrequency),
+    mainPartners: normalizeStringArray(input.mainPartners),
+    competitionGoals: normalizeOptionalString(input.competitionGoals),
 
     scheduleNotes: normalizeOptionalString(input.scheduleNotes),
     boundariesNotes: normalizeOptionalString(input.boundariesNotes),
@@ -152,6 +199,9 @@ function normalizeProfile(raw: unknown): FighterProfile {
     weightClass: normalizeOptionalString(input.weightClass),
     currentWeight: normalizeOptionalNumber(input.currentWeight),
     targetWeight: normalizeOptionalNumber(input.targetWeight),
+    sleep: normalizeOptionalString(input.sleep),
+    readiness: normalizeOptionalString(input.readiness),
+    currentStatus: normalizeOptionalString(input.currentStatus),
 
     dietType: normalizeDietType(input.dietType),
     allergies: normalizeStringArray(input.allergies),
@@ -165,17 +215,20 @@ function normalizeProfile(raw: unknown): FighterProfile {
 
 const EMPTY_PROFILE: FighterProfile = {
   secondaryArts: [],
+  activeConstraints: [],
+  completedCorrections: [],
+  progressionHistory: [],
+  mainPartners: [],
   allergies: [],
   intolerances: [],
   foodDislikes: [],
   favoriteFoods: [],
   avoidFoods: [],
   dietType: "none",
+  coachingStyle: "Direct",
 };
 
 export function ProfileProvider({ children }: { children: React.ReactNode }) {
-  console.log("[profiles] provider mounted");
-
   const supabase = useMemo(() => getSupabaseBrowser(), []);
 
   const mountedRef = useRef(true);
@@ -201,11 +254,6 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
           error: sessionError,
         } = await supabase.auth.getSession();
 
-        console.log("[profiles] getSession error:", sessionError?.message ?? null);
-        console.log("[profiles] session exists:", !!session);
-        console.log("[profiles] user id:", session?.user?.id ?? null);
-        console.log("[profiles] user email:", session?.user?.email ?? null);
-
         if (sessionError) {
           if (mountedRef.current) {
             setUser(null);
@@ -222,7 +270,6 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
         setUser(u);
 
         if (!u) {
-          console.log("[profiles] no authenticated user");
           setProfile(null);
           setLoading(false);
           return;
@@ -233,10 +280,6 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
           .select("data")
           .eq("user_id", u.id)
           .maybeSingle();
-
-        console.log("[profiles] profile query error:", error?.message ?? null);
-        console.log("[profiles] profile row exists:", !!data);
-        console.log("[profiles] raw profile row:", data ?? null);
 
         if (!mountedRef.current) return;
 
@@ -249,9 +292,6 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
         const nextProfile = data?.data
           ? normalizeProfile(data.data)
           : { ...EMPTY_PROFILE };
-
-        console.log("[profiles] normalized profile:", nextProfile);
-        console.log("[profiles] final profile name:", nextProfile.name ?? null);
 
         setProfile(nextProfile);
         setLoading(false);
@@ -280,9 +320,6 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log("[profiles] auth state change:", event);
-      console.log("[profiles] auth state user:", session?.user?.email ?? null);
-
       if (!mountedRef.current) return;
 
       const nextUser = session?.user ?? null;
@@ -380,9 +417,7 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <ProfileContext.Provider value={value}>
-      {children}
-    </ProfileContext.Provider>
+    <ProfileContext.Provider value={value}>{children}</ProfileContext.Provider>
   );
 }
 

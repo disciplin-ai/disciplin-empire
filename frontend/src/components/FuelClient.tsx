@@ -3,13 +3,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useProfile } from "../components/ProfileProvider";
 import FuelScreen, { FuelDecisionOutput } from "./FuelScreen";
-import type {
-  FighterInput,
-  TrainingInput,
-} from "../lib/fuelTypes";
+import type { FighterInput, TrainingInput } from "../lib/fuelTypes";
 import type { FuelHistoryPoint } from "../components/FuelScoreChart";
 
 type Mode = "text" | "photo";
+
+const LATEST_FUEL_KEY = "disciplin_latest_fuel";
 
 async function postJson<T>(url: string, body: any): Promise<T> {
   const res = await fetch(url, {
@@ -18,8 +17,13 @@ async function postJson<T>(url: string, body: any): Promise<T> {
     credentials: "include",
     body: JSON.stringify(body),
   });
+
   const json = await res.json().catch(() => null);
-  if (!res.ok || !json?.ok) throw new Error(json?.error || `Request failed (${res.status})`);
+
+  if (!res.ok || !json?.ok) {
+    throw new Error(json?.error || `Request failed (${res.status})`);
+  }
+
   return json as T;
 }
 
@@ -29,13 +33,21 @@ async function postForm<T>(url: string, fd: FormData): Promise<T> {
     credentials: "include",
     body: fd,
   });
+
   const json = await res.json().catch(() => null);
-  if (!res.ok || !json?.ok) throw new Error(json?.error || `Request failed (${res.status})`);
+
+  if (!res.ok || !json?.ok) {
+    throw new Error(json?.error || `Request failed (${res.status})`);
+  }
+
   return json as T;
 }
 
 function deriveNextMealTarget(training: TrainingInput, goal: string) {
-  const isHard = String(training.intensity || "").toLowerCase().includes("hard");
+  const isHard = String(training.intensity || "")
+    .toLowerCase()
+    .includes("hard");
+
   const isFightWeek = !!training.fightWeek;
 
   if (isFightWeek) {
@@ -85,7 +97,8 @@ export default function FuelClient() {
   const [historyLoading, setHistoryLoading] = useState(false);
 
   const canRun = !!user && !authLoading && !running;
-  const canAnalyze = canRun && mealText.trim().length > 0 && (mode === "text" || !!photo);
+  const canAnalyze =
+    canRun && mealText.trim().length > 0 && (mode === "text" || !!photo);
 
   const fighter: FighterInput = useMemo(() => {
     if (!profile) return {};
@@ -114,11 +127,16 @@ export default function FuelClient() {
 
   const profileLine = useMemo(() => {
     if (!profile) return "Using Profile: not set";
-    const cw = (profile as any).currentWeight || (profile as any).walkAroundWeight || "";
+
+    const cw =
+      (profile as any).currentWeight ||
+      (profile as any).walkAroundWeight ||
+      "";
     const base = (profile as any).baseArt || "";
     const lvl = (profile as any).competitionLevel || "";
     const pace = (profile as any).paceStyle || "";
     const campGoal = (profile as any).campGoal || "";
+
     const parts = [
       cw ? `${cw}` : "",
       base,
@@ -126,19 +144,54 @@ export default function FuelClient() {
       pace,
       campGoal ? `Goal: ${campGoal}` : "",
     ].filter(Boolean);
-    return parts.length ? `Using Profile: ${parts.join(" · ")}` : "Using Profile";
+
+    return parts.length
+      ? `Using Profile: ${parts.join(" · ")}`
+      : "Using Profile";
   }, [profile]);
 
-  const nextMealTarget = useMemo(() => deriveNextMealTarget(training, purpose), [training, purpose]);
+  const nextMealTarget = useMemo(
+    () => deriveNextMealTarget(training, purpose),
+    [training, purpose]
+  );
+
+  function saveLatestFuel(result: FuelDecisionOutput) {
+    try {
+      localStorage.setItem(
+        LATEST_FUEL_KEY,
+        JSON.stringify({
+          present: true,
+          score: result.score,
+          rating: result.rating,
+          decision: result.decision,
+          assessment: result.assessment,
+          impact: result.impact,
+          next_steps: result.next_steps,
+          report: result.report,
+          savedAt: new Date().toISOString(),
+        })
+      );
+
+      window.dispatchEvent(new Event("disciplin:fuel-updated"));
+    } catch {
+      // ignore local storage failure
+    }
+  }
 
   async function refreshHistory() {
     if (!user) return;
+
     try {
       setHistoryLoading(true);
-      const h = await postJson<{ ok: true; points: FuelHistoryPoint[] }>("/api/fuel", {
-        mode: "history",
-        limit: 10,
-      });
+
+      const h = await postJson<{ ok: true; points: FuelHistoryPoint[] }>(
+        "/api/fuel",
+        {
+          mode: "history",
+          limit: 10,
+        }
+      );
+
       setHistory(h.points ?? []);
     } catch {
       // ignore
@@ -152,6 +205,7 @@ export default function FuelClient() {
       setHistory([]);
       return;
     }
+
     refreshHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
@@ -167,10 +221,12 @@ export default function FuelClient() {
       setError("Sign in to use Fuel.");
       return;
     }
+
     if (!mealText.trim()) {
       setError("Meal text is required.");
       return;
     }
+
     if (mode === "photo" && !photo) {
       setError("Add a meal photo or switch to Text only.");
       return;
@@ -186,16 +242,29 @@ export default function FuelClient() {
         fd.append("ingredients", mealText);
         fd.append("fighter", JSON.stringify(fighter));
         fd.append("training", JSON.stringify(training));
-        const resp = await postForm<FuelDecisionOutput & { ok: true }>("/api/fuelPhoto", fd);
-        setOut(resp as any);
+
+        const resp = await postForm<FuelDecisionOutput & { ok: true }>(
+          "/api/fuelPhoto",
+          fd
+        );
+
+        const result = resp as any;
+        setOut(result);
+        saveLatestFuel(result);
       } else {
-        const resp = await postJson<FuelDecisionOutput & { ok: true }>("/api/fuel", {
-          mode: "analyze",
-          meals: mealText,
-          fighter,
-          training,
-        });
-        setOut(resp as any);
+        const resp = await postJson<FuelDecisionOutput & { ok: true }>(
+          "/api/fuel",
+          {
+            mode: "analyze",
+            meals: mealText,
+            fighter,
+            training,
+          }
+        );
+
+        const result = resp as any;
+        setOut(result);
+        saveLatestFuel(result);
       }
 
       setAnswers({});
@@ -212,20 +281,28 @@ export default function FuelClient() {
       setError("Sign in to refine.");
       return;
     }
+
     if (!out?.followups_id) {
       setError("Generate a report first.");
       return;
     }
+
     setRunning(true);
     setError(null);
 
     try {
-      const resp = await postJson<FuelDecisionOutput & { ok: true }>("/api/fuel", {
-        mode: "refine",
-        followups_id: out.followups_id,
-        answers,
-      });
-      setOut(resp as any);
+      const resp = await postJson<FuelDecisionOutput & { ok: true }>(
+        "/api/fuel",
+        {
+          mode: "refine",
+          followups_id: out.followups_id,
+          answers,
+        }
+      );
+
+      const result = resp as any;
+      setOut(result);
+      saveLatestFuel(result);
       await refreshHistory();
     } catch (e: any) {
       setError(e?.message ?? "Fuel refine failed.");

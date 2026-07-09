@@ -1,25 +1,33 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useProfile, type DietType, type FighterProfile } from "./ProfileProvider";
+import {
+  useProfile,
+  type CoachingStyle,
+  type DietType,
+  type FighterProfile,
+} from "./ProfileProvider";
 
-type StepKey = "identity" | "experience" | "body" | "camp" | "nutrition";
+type SectionKey =
+  | "identity"
+  | "limits"
+  | "style"
+  | "focus"
+  | "history"
+  | "coach"
+  | "camp"
+  | "readiness";
 
-const STEP_ORDER: StepKey[] = [
-  "identity",
-  "experience",
-  "body",
-  "camp",
-  "nutrition",
+const SECTIONS: Array<{ key: SectionKey; label: string; symbol: string }> = [
+  { key: "identity", label: "Identity", symbol: "ID" },
+  { key: "limits", label: "Limits", symbol: "!" },
+  { key: "style", label: "Style", symbol: "AR" },
+  { key: "focus", label: "Focus", symbol: "LK" },
+  { key: "history", label: "History", symbol: "HX" },
+  { key: "coach", label: "Coach", symbol: "VO" },
+  { key: "camp", label: "Camp", symbol: "GY" },
+  { key: "readiness", label: "Ready", symbol: "RD" },
 ];
-
-const STEP_LABELS: Record<StepKey, string> = {
-  identity: "1. Identity",
-  experience: "2. Experience",
-  body: "3. Body & Style",
-  camp: "4. Camp & Boundaries",
-  nutrition: "5. Nutrition",
-};
 
 const BASE_ART_OPTIONS = [
   "MMA",
@@ -31,8 +39,6 @@ const BASE_ART_OPTIONS = [
   "Judo",
   "Sambo",
 ];
-
-const STANCE_OPTIONS = ["Orthodox", "Southpaw", "Switch", "Open stance"];
 
 const SECONDARY_ART_OPTIONS = [
   "Boxing",
@@ -52,6 +58,32 @@ const COMPETITION_LEVEL_OPTIONS = [
   "Pro",
 ];
 
+const PHASE_OPTIONS = [
+  "Base build",
+  "Fight camp",
+  "Weight cut",
+  "Recovery",
+  "Technical rebuild",
+  "Return to training",
+];
+
+const ARCHETYPE_OPTIONS = [
+  "Pressure fighter",
+  "Counter striker",
+  "Chain wrestler",
+  "Control grappler",
+  "Scrambler",
+  "Volume striker",
+  "Clinch fighter",
+];
+
+const COACHING_STYLE_OPTIONS: CoachingStyle[] = [
+  "Direct",
+  "Tactical",
+  "Encouraging",
+  "Brutal",
+];
+
 const DIET_OPTIONS: Array<{ value: DietType; label: string }> = [
   { value: "none", label: "No specific diet" },
   { value: "halal", label: "Halal" },
@@ -62,19 +94,61 @@ const DIET_OPTIONS: Array<{ value: DietType; label: string }> = [
   { value: "keto", label: "Keto" },
 ];
 
+const EMPTY_PROFILE: FighterProfile = {
+  name: "",
+  age: "",
+  height: "",
+  walkAroundWeight: "",
+  baseArt: "",
+  stance: "",
+  secondaryArts: [],
+  yearsTraining: "",
+  competitionLevel: "",
+  competitionStatus: "",
+  currentPhase: "",
+  recentCamp: "",
+  campGoal: "",
+  bodyType: "",
+  paceStyle: "",
+  pressurePreference: "",
+  fighterArchetype: "",
+  strengths: "",
+  weaknesses: "",
+  currentFocus: "",
+  activeConstraints: [],
+  coachingStyle: "Direct",
+  currentCorrection: "",
+  currentLock: "",
+  completedCorrections: [],
+  progressionHistory: [],
+  availability: "",
+  injuryHistory: "",
+  hardBoundaries: "",
+  lifeLoad: "",
+  gym: "",
+  trainingFrequency: "",
+  mainPartners: [],
+  competitionGoals: "",
+  scheduleNotes: "",
+  boundariesNotes: "",
+  fightDate: "",
+  weightClass: "",
+  currentWeight: undefined,
+  targetWeight: undefined,
+  sleep: "",
+  readiness: "",
+  currentStatus: "",
+  dietType: "none",
+  allergies: [],
+  intolerances: [],
+  foodDislikes: [],
+  favoriteFoods: [],
+  avoidFoods: [],
+  religiousDietNotes: "",
+};
+
 function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
-}
-
-function parseLines(value: string): string[] {
-  return value
-    .split("\n")
-    .map((v) => v.trim())
-    .filter(Boolean);
-}
-
-function linesFromArray(value?: string[]) {
-  return Array.isArray(value) ? value.join("\n") : "";
 }
 
 function textValue(value: string | number | undefined | null) {
@@ -82,7 +156,168 @@ function textValue(value: string | number | undefined | null) {
   return value ?? "";
 }
 
-function ChoicePills({
+function parseLines(value: string): string[] {
+  return value
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function linesFromArray(value?: string[]) {
+  return Array.isArray(value) ? value.join("\n") : "";
+}
+
+function compact(value?: string | number | null, fallback = "Not set") {
+  const text = textValue(value).trim();
+  return text.length ? text : fallback;
+}
+
+function kg(value?: number) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${value} kg`
+    : "Not logged";
+}
+
+function daysUntil(dateStr?: string | null) {
+  if (!dateStr) return null;
+  const target = new Date(dateStr);
+  if (Number.isNaN(target.getTime())) return null;
+  return Math.max(0, Math.ceil((target.getTime() - Date.now()) / 86400000));
+}
+
+function ToneDot({ tone = "emerald" }: { tone?: "emerald" | "amber" | "rose" | "cyan" | "violet" | "gold" }) {
+  const cls =
+    tone === "amber"
+      ? "bg-amber-300"
+      : tone === "rose"
+        ? "bg-rose-300"
+        : tone === "cyan"
+          ? "bg-cyan-200"
+          : tone === "violet"
+            ? "bg-violet-300"
+            : tone === "gold"
+              ? "bg-yellow-300"
+              : "bg-emerald-300";
+
+  return <span className={cn("h-2 w-2 rounded-full", cls)} />;
+}
+
+function Chip({
+  children,
+  tone = "neutral",
+}: {
+  children: React.ReactNode;
+  tone?: "neutral" | "emerald" | "amber" | "rose" | "cyan" | "violet" | "gold";
+}) {
+  const cls =
+    tone === "emerald"
+      ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-100"
+      : tone === "amber"
+        ? "border-amber-400/20 bg-amber-400/10 text-amber-100"
+        : tone === "rose"
+          ? "border-rose-400/22 bg-rose-400/10 text-rose-100"
+          : tone === "cyan"
+            ? "border-cyan-300/20 bg-cyan-300/10 text-cyan-100"
+            : tone === "violet"
+              ? "border-violet-300/20 bg-violet-300/10 text-violet-100"
+              : tone === "gold"
+                ? "border-yellow-300/25 bg-yellow-300/10 text-yellow-100"
+                : "border-white/10 bg-white/[0.045] text-white/62";
+
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold", cls)}>
+      {children}
+    </span>
+  );
+}
+
+function IOSPanel({
+  title,
+  label,
+  children,
+  right,
+}: {
+  title: string;
+  label?: string;
+  children: React.ReactNode;
+  right?: React.ReactNode;
+}) {
+  return (
+    <section className="overflow-hidden rounded-[28px] border border-white/[0.08] bg-[linear-gradient(180deg,rgba(255,255,255,0.065),rgba(255,255,255,0.026))] shadow-[0_18px_70px_rgba(0,0,0,0.32)]">
+      <div className="flex items-start justify-between gap-4 border-b border-white/[0.06] px-5 py-4">
+        <div className="min-w-0">
+          {label ? (
+            <div className="text-[10px] font-semibold uppercase tracking-[0.24em] text-white/35">
+              {label}
+            </div>
+          ) : null}
+          <h2 className="mt-1 text-lg font-semibold tracking-[-0.02em] text-white">
+            {title}
+          </h2>
+        </div>
+        {right}
+      </div>
+      <div className="p-3 sm:p-4">{children}</div>
+    </section>
+  );
+}
+
+function Cell({
+  label,
+  value,
+  children,
+  tone,
+}: {
+  label: string;
+  value?: string;
+  children?: React.ReactNode;
+  tone?: "emerald" | "amber" | "rose" | "cyan" | "violet" | "gold";
+}) {
+  return (
+    <div className="rounded-[20px] border border-white/[0.07] bg-black/24 px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          {tone ? <ToneDot tone={tone} /> : null}
+          <div className="truncate text-[12px] font-semibold text-white/52">
+            {label}
+          </div>
+        </div>
+        {value ? (
+          <div className="truncate text-right text-sm font-semibold text-white">
+            {value}
+          </div>
+        ) : null}
+      </div>
+      {children ? <div className="mt-3">{children}</div> : null}
+    </div>
+  );
+}
+
+function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={cn(
+        "h-11 w-full rounded-[16px] border border-white/[0.08] bg-white/[0.04] px-3 text-sm text-white outline-none placeholder:text-white/28 focus:border-emerald-300/30 focus:ring-2 focus:ring-emerald-300/10",
+        props.className
+      )}
+    />
+  );
+}
+
+function TextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      className={cn(
+        "w-full resize-none rounded-[16px] border border-white/[0.08] bg-white/[0.04] px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/28 focus:border-emerald-300/30 focus:ring-2 focus:ring-emerald-300/10",
+        props.className
+      )}
+    />
+  );
+}
+
+function OptionGrid({
   options,
   value,
   onChange,
@@ -111,17 +346,17 @@ function ChoicePills({
               }
 
               const arr = Array.isArray(value) ? value : [];
-              if (arr.includes(option)) {
-                onChange(arr.filter((v) => v !== option));
-              } else {
-                onChange([...arr, option]);
-              }
+              onChange(
+                arr.includes(option)
+                  ? arr.filter((item) => item !== option)
+                  : [...arr, option]
+              );
             }}
             className={cn(
-              "rounded-full border px-4 py-2 text-sm transition",
+              "rounded-full border px-3.5 py-2 text-xs font-semibold transition active:scale-[0.98]",
               active
-                ? "border-emerald-400/60 bg-emerald-500/15 text-emerald-100"
-                : "border-slate-700/80 bg-slate-950/40 text-slate-200 hover:bg-slate-900/50"
+                ? "border-emerald-300/55 bg-emerald-300/14 text-emerald-100 shadow-[0_0_24px_rgba(52,211,153,0.10)]"
+                : "border-white/10 bg-white/[0.035] text-white/55 hover:bg-white/[0.06] hover:text-white"
             )}
           >
             {option}
@@ -132,95 +367,58 @@ function ChoicePills({
   );
 }
 
-function Field({
-  label,
-  children,
+function SectionNav({
+  active,
+  onChange,
 }: {
-  label: string;
-  children: React.ReactNode;
+  active: SectionKey;
+  onChange: (next: SectionKey) => void;
 }) {
   return (
-    <label className="block">
-      <div className="mb-2 text-sm text-slate-300">{label}</div>
-      {children}
-    </label>
+    <div className="sticky top-[73px] z-20 -mx-1 overflow-x-auto border-y border-white/[0.06] bg-[#020810]/88 px-1 py-2 backdrop-blur-xl">
+      <div className="flex min-w-max gap-2">
+        {SECTIONS.map((item) => {
+          const selected = item.key === active;
+          return (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => onChange(item.key)}
+              className={cn(
+                "flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold transition active:scale-[0.98]",
+                selected
+                  ? "border-white/18 bg-white text-[#041026]"
+                  : "border-white/10 bg-white/[0.035] text-white/56 hover:text-white"
+              )}
+            >
+              <span className={cn("text-[10px]", selected ? "text-[#041026]/70" : "text-white/35")}>
+                {item.symbol}
+              </span>
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
-
-function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      {...props}
-      className={cn(
-        "w-full rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/20",
-        props.className
-      )}
-    />
-  );
-}
-
-function TextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return (
-    <textarea
-      {...props}
-      className={cn(
-        "w-full rounded-2xl border border-slate-800/70 bg-slate-950/30 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/20",
-        props.className
-      )}
-    />
-  );
-}
-
-const EMPTY_PROFILE: FighterProfile = {
-  name: "",
-  age: "",
-  height: "",
-  walkAroundWeight: "",
-  baseArt: "",
-  stance: "",
-  secondaryArts: [],
-  yearsTraining: "",
-  competitionLevel: "",
-  recentCamp: "",
-  campGoal: "",
-  bodyType: "",
-  paceStyle: "",
-  pressurePreference: "",
-  strengths: "",
-  weaknesses: "",
-  availability: "",
-  injuryHistory: "",
-  hardBoundaries: "",
-  lifeLoad: "",
-  scheduleNotes: "",
-  boundariesNotes: "",
-  fightDate: "",
-  weightClass: "",
-  currentWeight: undefined,
-  targetWeight: undefined,
-  dietType: "none",
-  allergies: [],
-  intolerances: [],
-  foodDislikes: [],
-  favoriteFoods: [],
-  avoidFoods: [],
-  religiousDietNotes: "",
-};
 
 export default function ProfileForm() {
   const { profile, saveProfile, loading } = useProfile();
-
-  const [step, setStep] = useState<StepKey>("identity");
+  const [section, setSection] = useState<SectionKey>("identity");
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
   const [form, setForm] = useState<FighterProfile>(EMPTY_PROFILE);
 
+  const [activeConstraintsText, setActiveConstraintsText] = useState("");
+  const [completedCorrectionsText, setCompletedCorrectionsText] = useState("");
+  const [progressionHistoryText, setProgressionHistoryText] = useState("");
+  const [mainPartnersText, setMainPartnersText] = useState("");
   const [allergiesText, setAllergiesText] = useState("");
   const [intolerancesText, setIntolerancesText] = useState("");
   const [foodDislikesText, setFoodDislikesText] = useState("");
-  const [favoriteFoodsText, setFavoriteFoodsText] = useState("");
+    const [favoriteFoodsText, setFavoriteFoodsText] = useState("");
   const [avoidFoodsText, setAvoidFoodsText] = useState("");
 
   useEffect(() => {
@@ -230,14 +428,23 @@ export default function ProfileForm() {
       ...EMPTY_PROFILE,
       ...p,
       secondaryArts: p.secondaryArts ?? [],
+      activeConstraints: p.activeConstraints ?? [],
+      completedCorrections: p.completedCorrections ?? [],
+      progressionHistory: p.progressionHistory ?? [],
+      mainPartners: p.mainPartners ?? [],
       allergies: p.allergies ?? [],
       intolerances: p.intolerances ?? [],
       foodDislikes: p.foodDislikes ?? [],
       favoriteFoods: p.favoriteFoods ?? [],
       avoidFoods: p.avoidFoods ?? [],
       dietType: p.dietType ?? "none",
+      coachingStyle: p.coachingStyle ?? "Direct",
     });
 
+    setActiveConstraintsText(linesFromArray(p.activeConstraints));
+    setCompletedCorrectionsText(linesFromArray(p.completedCorrections));
+    setProgressionHistoryText(linesFromArray(p.progressionHistory));
+    setMainPartnersText(linesFromArray(p.mainPartners));
     setAllergiesText(linesFromArray(p.allergies));
     setIntolerancesText(linesFromArray(p.intolerances));
     setFoodDislikesText(linesFromArray(p.foodDislikes));
@@ -245,22 +452,8 @@ export default function ProfileForm() {
     setAvoidFoodsText(linesFromArray(p.avoidFoods));
   }, [profile]);
 
-  const currentIndex = useMemo(() => STEP_ORDER.indexOf(step), [step]);
-
   function patch<K extends keyof FighterProfile>(key: K, value: FighterProfile[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
-  }
-
-  function goNext() {
-    if (currentIndex < STEP_ORDER.length - 1) {
-      setStep(STEP_ORDER[currentIndex + 1]);
-    }
-  }
-
-  function goBack() {
-    if (currentIndex > 0) {
-      setStep(STEP_ORDER[currentIndex - 1]);
-    }
   }
 
   async function handleSave() {
@@ -270,23 +463,30 @@ export default function ProfileForm() {
 
     const nextProfile: FighterProfile = {
       ...form,
+      activeConstraints: parseLines(activeConstraintsText),
+      completedCorrections: parseLines(completedCorrectionsText),
+      progressionHistory: parseLines(progressionHistoryText),
+      mainPartners: parseLines(mainPartnersText),
       allergies: parseLines(allergiesText),
       intolerances: parseLines(intolerancesText),
       foodDislikes: parseLines(foodDislikesText),
       favoriteFoods: parseLines(favoriteFoodsText),
       avoidFoods: parseLines(avoidFoodsText),
       currentWeight:
-        form.currentWeight === undefined || form.currentWeight === null || form.currentWeight === ("" as never)
+        form.currentWeight === undefined ||
+        form.currentWeight === null ||
+        form.currentWeight === ("" as never)
           ? undefined
           : Number(form.currentWeight),
       targetWeight:
-        form.targetWeight === undefined || form.targetWeight === null || form.targetWeight === ("" as never)
+        form.targetWeight === undefined ||
+        form.targetWeight === null ||
+        form.targetWeight === ("" as never)
           ? undefined
           : Number(form.targetWeight),
     };
 
     const result = await saveProfile(nextProfile);
-
     setSaving(false);
 
     if (!result.ok) {
@@ -294,332 +494,280 @@ export default function ProfileForm() {
       return;
     }
 
-    setNotice("Profile saved.");
+    setNotice("Fighter file saved.");
   }
+
+  const daysRemaining = useMemo(() => daysUntil(form.fightDate), [form.fightDate]);
+
+  const fileDepth = [
+    form.name,
+    form.baseArt,
+    form.competitionLevel,
+    form.currentPhase,
+    form.fighterArchetype,
+    form.currentFocus,
+    form.coachingStyle,
+    form.gym,
+  ].filter(Boolean).length;
 
   if (loading) {
     return (
-      <div className="rounded-3xl border border-slate-800/60 bg-slate-950/25 p-6 text-sm text-slate-300">
-        Loading profile...
+      <div className="rounded-[28px] border border-white/[0.08] bg-white/[0.03] p-6 text-sm text-white/55">
+        Loading fighter file...
       </div>
     );
   }
 
   return (
-    <div className="rounded-3xl border border-slate-800/60 bg-slate-950/25 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
-      <div className="border-b border-slate-800/40 px-6 py-6">
-        <div className="text-[11px] font-semibold tracking-[0.32em] text-emerald-300">
-          PROFILE
-        </div>
-        <h1 className="mt-2 text-2xl font-semibold text-white">Camp identity</h1>
-        <p className="mt-2 text-sm text-slate-300/70">
-          Fill this once. Sensei + Fuel + Vision should pull this automatically.
-        </p>
+    <div className="space-y-4">
+      <section className="overflow-hidden rounded-[34px] border border-white/[0.08] bg-[radial-gradient(circle_at_18%_0%,rgba(52,211,153,0.16),transparent_32%),radial-gradient(circle_at_84%_8%,rgba(250,204,21,0.12),transparent_30%),linear-gradient(145deg,rgba(16,30,52,0.96),rgba(3,10,22,0.98)_58%,rgba(2,8,16,1))] shadow-[0_24px_90px_rgba(0,0,0,0.42)]">
+        <div className="p-5 md:p-7">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap gap-2">
+              <Chip tone="emerald">Fighter file</Chip>
+              <Chip tone={form.currentFocus ? "gold" : "amber"}>
+                {form.currentFocus ? "Focus locked" : "Focus missing"}
+              </Chip>
+              <Chip tone={activeConstraintsText.trim() ? "rose" : "neutral"}>
+                {activeConstraintsText.trim() ? "Limits active" : "No limits"}
+              </Chip>
+            </div>
+            <Chip tone="cyan">{fileDepth}/8 depth</Chip>
+          </div>
 
-        <div className="mt-5 flex flex-wrap gap-2">
-          {STEP_ORDER.map((key) => {
-            const active = key === step;
+          <div className="mt-7 grid gap-6 lg:grid-cols-[1fr_320px]">
+            <div className="min-w-0">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.3em] text-white/42">
+                Operating identity
+              </div>
+              <h1 className="mt-3 text-5xl font-bold leading-none tracking-[-0.04em] text-white md:text-7xl">
+                {compact(form.name, "Unnamed fighter")}
+              </h1>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <Chip tone="emerald">{compact(form.baseArt, "Primary art missing")}</Chip>
+                <Chip tone="cyan">{compact(form.fighterArchetype, "Archetype missing")}</Chip>
+                <Chip tone="violet">{compact(form.coachingStyle, "Direct")}</Chip>
+              </div>
+            </div>
 
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setStep(key)}
-                className={cn(
-                  "rounded-full border px-4 py-2 text-sm transition",
-                  active
-                    ? "border-emerald-400/70 bg-emerald-500/15 text-emerald-100"
-                    : "border-slate-700/80 bg-slate-950/40 text-slate-200 hover:bg-slate-900/50"
-                )}
-              >
-                {STEP_LABELS[key]}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="px-6 py-6">
-        {step === "identity" && (
-          <div className="grid gap-6 md:grid-cols-2">
-            <Field label="Name / Nickname">
-              <TextInput
-                value={textValue(form.name)}
-                onChange={(e) => patch("name", e.target.value)}
-                placeholder="Dylan"
-              />
-            </Field>
-
-            <Field label="Age">
-              <TextInput
-                value={textValue(form.age)}
-                onChange={(e) => patch("age", e.target.value)}
-                placeholder="16"
-              />
-            </Field>
-
-            <Field label="Height">
-              <TextInput
-                value={textValue(form.height)}
-                onChange={(e) => patch("height", e.target.value)}
-                placeholder="175 cm"
-              />
-            </Field>
-
-            <Field label="Walk-around weight">
-              <TextInput
-                value={textValue(form.walkAroundWeight)}
-                onChange={(e) => patch("walkAroundWeight", e.target.value)}
-                placeholder="70 kg"
-              />
-            </Field>
-
-            <Field label="Current weight">
-              <TextInput
-                type="number"
-                step="0.1"
-                value={textValue(form.currentWeight)}
-                onChange={(e) =>
-                  patch(
-                    "currentWeight",
-                    e.target.value === "" ? undefined : Number(e.target.value)
-                  )
+            <div className="grid content-start gap-2">
+              <Cell label="Current focus" value={compact(form.currentFocus)} tone="gold" />
+              <Cell label="Phase" value={compact(form.currentPhase)} tone="emerald" />
+              <Cell label="Readiness" value={compact(form.readiness)} tone="amber" />
+              <Cell
+                label="Fight"
+                value={
+                  daysRemaining !== null
+                    ? `${daysRemaining} days`
+                    : compact(form.fightDate, "No date")
                 }
-                placeholder="68.2"
+                tone="rose"
               />
-            </Field>
-
-            <Field label="Target weight">
-              <TextInput
-                type="number"
-                step="0.1"
-                value={textValue(form.targetWeight)}
-                onChange={(e) =>
-                  patch(
-                    "targetWeight",
-                    e.target.value === "" ? undefined : Number(e.target.value)
-                  )
-                }
-                placeholder="66"
-              />
-            </Field>
-
-            <Field label="Fight date">
-              <TextInput
-                type="date"
-                value={textValue(form.fightDate)}
-                onChange={(e) => patch("fightDate", e.target.value)}
-              />
-            </Field>
-
-            <Field label="Weight class">
-              <TextInput
-                value={textValue(form.weightClass)}
-                onChange={(e) => patch("weightClass", e.target.value)}
-                placeholder="66 kg"
-              />
-            </Field>
-
-            <div className="md:col-span-2">
-              <Field label="Base art">
-                <ChoicePills
-                  options={BASE_ART_OPTIONS}
-                  value={textValue(form.baseArt)}
-                  onChange={(next) => patch("baseArt", String(next))}
-                />
-              </Field>
-            </div>
-
-            <div className="md:col-span-2">
-              <Field label="Stance">
-                <ChoicePills
-                  options={STANCE_OPTIONS}
-                  value={textValue(form.stance)}
-                  onChange={(next) => patch("stance", String(next))}
-                />
-              </Field>
-            </div>
-
-            <div className="md:col-span-2">
-              <Field label="Secondary arts">
-                <ChoicePills
-                  options={SECONDARY_ART_OPTIONS}
-                  value={form.secondaryArts ?? []}
-                  onChange={(next) => patch("secondaryArts", next as string[])}
-                  multi
-                />
-              </Field>
             </div>
           </div>
-        )}
+        </div>
+      </section>
 
-        {step === "experience" && (
-          <div className="grid gap-6 md:grid-cols-2">
-            <Field label="Years training">
-              <TextInput
-                value={textValue(form.yearsTraining)}
-                onChange={(e) => patch("yearsTraining", e.target.value)}
-                placeholder="3"
-              />
-            </Field>
+      <SectionNav active={section} onChange={setSection} />
 
-            <Field label="Competition level">
-              <ChoicePills
-                options={COMPETITION_LEVEL_OPTIONS}
-                value={textValue(form.competitionLevel)}
-                onChange={(next) => patch("competitionLevel", String(next))}
-              />
-            </Field>
+      {section === "identity" && (
+        <IOSPanel title="Fighter identity" label="Passport" right={<Chip tone="emerald">Core</Chip>}>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Cell label="Name / nickname" value={compact(form.name)}>
+              <TextInput value={textValue(form.name)} onChange={(e) => patch("name", e.target.value)} placeholder="Dylan" />
+            </Cell>
+            <Cell label="Age" value={compact(form.age)}>
+              <TextInput value={textValue(form.age)} onChange={(e) => patch("age", e.target.value)} placeholder="16" />
+            </Cell>
+            <Cell label="Primary art" value={compact(form.baseArt)} tone="emerald">
+              <OptionGrid options={BASE_ART_OPTIONS} value={textValue(form.baseArt)} onChange={(next) => patch("baseArt", String(next))} />
+            </Cell>
+            <Cell label="Secondary arts" value={`${form.secondaryArts?.length ?? 0} loaded`} tone="cyan">
+              <OptionGrid options={SECONDARY_ART_OPTIONS} value={form.secondaryArts ?? []} onChange={(next) => patch("secondaryArts", next as string[])} multi />
+            </Cell>
+            <Cell label="Experience" value={compact(form.competitionLevel)}>
+              <OptionGrid options={COMPETITION_LEVEL_OPTIONS} value={textValue(form.competitionLevel)} onChange={(next) => patch("competitionLevel", String(next))} />
+            </Cell>
+            <Cell label="Current phase" value={compact(form.currentPhase)} tone="gold">
+              <OptionGrid options={PHASE_OPTIONS} value={textValue(form.currentPhase)} onChange={(next) => patch("currentPhase", String(next))} />
+            </Cell>
+            <Cell label="Competition status" value={compact(form.competitionStatus)}>
+              <TextInput value={textValue(form.competitionStatus)} onChange={(e) => patch("competitionStatus", e.target.value)} placeholder="Amateur bout booked / off-season" />
+            </Cell>
+            <Cell label="Years training" value={compact(form.yearsTraining)}>
+              <TextInput value={textValue(form.yearsTraining)} onChange={(e) => patch("yearsTraining", e.target.value)} placeholder="3" />
+            </Cell>
+          </div>
+        </IOSPanel>
+      )}
 
-            <div className="md:col-span-2">
-              <Field label="Recent camp">
-                <TextArea
-                  rows={4}
-                  value={textValue(form.recentCamp)}
-                  onChange={(e) => patch("recentCamp", e.target.value)}
-                  placeholder="What happened in your last camp?"
-                />
-              </Field>
-            </div>
+      {section === "limits" && (
+        <IOSPanel title="Active constraints" label="Limits" right={<Chip tone="rose">Affects coaching</Chip>}>
+          <div className="grid gap-3">
+            <Cell label="Active constraints" value={`${parseLines(activeConstraintsText).length} active`} tone="rose">
+              <TextArea rows={5} value={activeConstraintsText} onChange={(e) => setActiveConstraintsText(e.target.value)} placeholder={"Knee limitation: no hard sprawls today\nShoulder restriction: no max clinch pummeling\nRecovery limit: keep volume controlled"} />
+            </Cell>
+            <Cell label="Injury history" value={form.injuryHistory ? "Loaded" : "None"}>
+              <TextArea rows={4} value={textValue(form.injuryHistory)} onChange={(e) => patch("injuryHistory", e.target.value)} placeholder="Knee, shoulder, ankle, back..." />
+            </Cell>
+            <Cell label="Hard boundaries" value={form.hardBoundaries ? "Loaded" : "None"}>
+              <TextArea rows={4} value={textValue(form.hardBoundaries)} onChange={(e) => patch("hardBoundaries", e.target.value)} placeholder="No heavy cuts below 68kg. No hard wrestling after sprint days." />
+            </Cell>
+            <Cell label="Life load" value={form.lifeLoad ? "Loaded" : "None"}>
+              <TextArea rows={3} value={textValue(form.lifeLoad)} onChange={(e) => patch("lifeLoad", e.target.value)} placeholder="Exam season, poor sleep, travel, family load..." />
+            </Cell>
+          </div>
+        </IOSPanel>
+      )}
 
-            <div className="md:col-span-2">
-              <Field label="Current camp goal">
-                <TextArea
-                  rows={4}
-                  value={textValue(form.campGoal)}
-                  onChange={(e) => patch("campGoal", e.target.value)}
-                  placeholder="Fight prep, technical correction, weight cut, cardio focus..."
-                />
-              </Field>
+      {section === "style" && (
+        <IOSPanel title="Fighter archetype" label="Style model" right={<Chip tone="cyan">Identity</Chip>}>
+          <div className="grid gap-3">
+            <Cell label="Archetype" value={compact(form.fighterArchetype)} tone="cyan">
+              <OptionGrid options={ARCHETYPE_OPTIONS} value={textValue(form.fighterArchetype)} onChange={(next) => patch("fighterArchetype", String(next))} />
+            </Cell>
+            <Cell label="Pace style" value={compact(form.paceStyle)}>
+              <TextInput value={textValue(form.paceStyle)} onChange={(e) => patch("paceStyle", e.target.value)} placeholder="High pace, measured pace, burst pace..." />
+            </Cell>
+            <Cell label="Pressure preference" value={compact(form.pressurePreference)}>
+              <TextInput value={textValue(form.pressurePreference)} onChange={(e) => patch("pressurePreference", e.target.value)} placeholder="Forward pressure, counter pressure..." />
+            </Cell>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Cell label="Strengths" value={form.strengths ? "Loaded" : "None"}>
+                <TextArea rows={4} value={textValue(form.strengths)} onChange={(e) => patch("strengths", e.target.value)} placeholder="Top pressure, chain wrestling, jab, timing..." />
+              </Cell>
+              <Cell label="Weaknesses" value={form.weaknesses ? "Loaded" : "None"}>
+                <TextArea rows={4} value={textValue(form.weaknesses)} onChange={(e) => patch("weaknesses", e.target.value)} placeholder="Fatigue, defense, overcommitting, bad exits..." />
+              </Cell>
             </div>
           </div>
-        )}
+        </IOSPanel>
+      )}
 
-        {step === "body" && (
-          <div className="grid gap-6 md:grid-cols-2">
-            <Field label="Body type">
-              <TextInput
-                value={textValue(form.bodyType)}
-                onChange={(e) => patch("bodyType", e.target.value)}
-                placeholder="Compact, long, explosive, stocky..."
-              />
-            </Field>
+      {section === "focus" && (
+        <IOSPanel title="Current focus" label="One active target" right={<Chip tone="gold">Locked layer</Chip>}>
+          <div className="grid gap-3">
+            <Cell label="Current focus" value={compact(form.currentFocus)} tone="gold">
+              <TextInput value={textValue(form.currentFocus)} onChange={(e) => patch("currentFocus", e.target.value)} placeholder="Takedown entries / jab recovery / rear hand discipline" />
+            </Cell>
+            <Cell label="Current camp goal" value={form.campGoal ? "Loaded" : "Missing"}>
+              <TextArea rows={4} value={textValue(form.campGoal)} onChange={(e) => patch("campGoal", e.target.value)} placeholder="What should this camp produce?" />
+            </Cell>
+            <Cell label="Recent camp" value={form.recentCamp ? "Loaded" : "Missing"}>
+              <TextArea rows={4} value={textValue(form.recentCamp)} onChange={(e) => patch("recentCamp", e.target.value)} placeholder="What happened in the last camp?" />
+            </Cell>
+          </div>
+        </IOSPanel>
+      )}
 
-            <Field label="Pace style">
-              <TextInput
-                value={textValue(form.paceStyle)}
-                onChange={(e) => patch("paceStyle", e.target.value)}
-                placeholder="High pace, measured pace, burst pace..."
-              />
-            </Field>
+      {section === "history" && (
+        <IOSPanel title="Correction history" label="Progression" right={<Chip tone="emerald">Proof trail</Chip>}>
+          <div className="grid gap-3">
+            <Cell label="Current correction" value={compact(form.currentCorrection)} tone="emerald">
+              <TextInput value={textValue(form.currentCorrection)} onChange={(e) => patch("currentCorrection", e.target.value)} placeholder="Rear hand discipline on entry" />
+            </Cell>
+            <Cell label="Current lock" value={compact(form.currentLock)} tone="gold">
+              <TextInput value={textValue(form.currentLock)} onChange={(e) => patch("currentLock", e.target.value)} placeholder="Locked until 5 clean proof reps" />
+            </Cell>
+            <Cell label="Completed corrections" value={`${parseLines(completedCorrectionsText).length} complete`}>
+              <TextArea rows={5} value={completedCorrectionsText} onChange={(e) => setCompletedCorrectionsText(e.target.value)} placeholder={"Stopped reaching before feet\nCleaned jab return\nKept head off center after exit"} />
+            </Cell>
+            <Cell label="Progression history" value={`${parseLines(progressionHistoryText).length} notes`}>
+              <TextArea rows={5} value={progressionHistoryText} onChange={(e) => setProgressionHistoryText(e.target.value)} placeholder={"Week 1: entry posture\nWeek 2: rear hand reset\nWeek 3: proof under resistance"} />
+            </Cell>
+          </div>
+        </IOSPanel>
+      )}
 
-            <Field label="Pressure preference">
-              <TextInput
-                value={textValue(form.pressurePreference)}
-                onChange={(e) => patch("pressurePreference", e.target.value)}
-                placeholder="Forward pressure, counter pressure..."
-              />
-            </Field>
+      {section === "coach" && (
+        <IOSPanel title="Coaching style" label="Sensei voice input" right={<Chip tone="violet">{compact(form.coachingStyle, "Direct")}</Chip>}>
+          <div className="grid gap-3">
+            <Cell label="Coach mode" value={compact(form.coachingStyle)} tone="violet">
+              <OptionGrid options={COACHING_STYLE_OPTIONS} value={textValue(form.coachingStyle)} onChange={(next) => patch("coachingStyle", next as CoachingStyle)} />
+            </Cell>
+            <Cell label="Boundaries notes" value={form.boundariesNotes ? "Loaded" : "None"}>
+              <TextArea rows={4} value={textValue(form.boundariesNotes)} onChange={(e) => patch("boundariesNotes", e.target.value)} placeholder="What should the system avoid? What should it enforce?" />
+            </Cell>
+            <Cell label="Body type" value={compact(form.bodyType)}>
+              <TextInput value={textValue(form.bodyType)} onChange={(e) => patch("bodyType", e.target.value)} placeholder="Compact, long, explosive, stocky..." />
+            </Cell>
+          </div>
+        </IOSPanel>
+      )}
 
-            <div className="md:col-span-2">
-              <Field label="Strengths">
-                <TextArea
-                  rows={4}
-                  value={textValue(form.strengths)}
-                  onChange={(e) => patch("strengths", e.target.value)}
-                  placeholder="Top pressure, chain wrestling, jab, timing..."
-                />
-              </Field>
+      {section === "camp" && (
+        <IOSPanel title="Training environment" label="Camp conditions" right={<Chip tone="cyan">Context</Chip>}>
+          <div className="grid gap-3">
+            <Cell label="Gym" value={compact(form.gym)} tone="cyan">
+              <TextInput value={textValue(form.gym)} onChange={(e) => patch("gym", e.target.value)} placeholder="Gym name" />
+            </Cell>
+            <Cell label="Training frequency" value={compact(form.trainingFrequency)}>
+              <TextInput value={textValue(form.trainingFrequency)} onChange={(e) => patch("trainingFrequency", e.target.value)} placeholder="5x/week. Wrestling Mon Wed Fri. Striking Tue Thu." />
+            </Cell>
+            <Cell label="Main partners" value={`${parseLines(mainPartnersText).length} partners`}>
+              <TextArea rows={4} value={mainPartnersText} onChange={(e) => setMainPartnersText(e.target.value)} placeholder={"Southpaw boxer\nHeavy wrestler\nFast counter striker"} />
+            </Cell>
+            <Cell label="Competition goals" value={form.competitionGoals ? "Loaded" : "Missing"}>
+              <TextArea rows={4} value={textValue(form.competitionGoals)} onChange={(e) => patch("competitionGoals", e.target.value)} placeholder="Win amateur bout, make 66kg, clean wrestling entries..." />
+            </Cell>
+            <Cell label="Schedule notes" value={form.scheduleNotes ? "Loaded" : "Missing"}>
+              <TextArea rows={3} value={textValue(form.scheduleNotes)} onChange={(e) => patch("scheduleNotes", e.target.value)} placeholder="School 8-3. MMA evenings. Recovery on Sunday." />
+            </Cell>
+          </div>
+        </IOSPanel>
+      )}
+
+      {section === "readiness" && (
+        <IOSPanel title="Readiness snapshot" label="Body state" right={<Chip tone="amber">{compact(form.readiness)}</Chip>}>
+          <div className="grid gap-3">
+            <div className="grid gap-3 sm:grid-cols-4">
+              <Cell label="Current" value={kg(form.currentWeight)} tone="amber" />
+              <Cell label="Target" value={kg(form.targetWeight)} tone="gold" />
+              <Cell label="Sleep" value={compact(form.sleep)} tone="cyan" />
+              <Cell label="Status" value={compact(form.currentStatus)} tone="emerald" />
             </div>
 
-            <div className="md:col-span-2">
-              <Field label="Weaknesses">
-                <TextArea
-                  rows={4}
-                  value={textValue(form.weaknesses)}
-                  onChange={(e) => patch("weaknesses", e.target.value)}
-                  placeholder="Fatigue, defence, overcommitting, bad exits..."
-                />
-              </Field>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Cell label="Current weight" value={kg(form.currentWeight)}>
+                <TextInput type="number" step="0.1" value={textValue(form.currentWeight)} onChange={(e) => patch("currentWeight", e.target.value === "" ? undefined : Number(e.target.value))} placeholder="68.2" />
+              </Cell>
+              <Cell label="Target weight" value={kg(form.targetWeight)}>
+                <TextInput type="number" step="0.1" value={textValue(form.targetWeight)} onChange={(e) => patch("targetWeight", e.target.value === "" ? undefined : Number(e.target.value))} placeholder="66" />
+              </Cell>
+              <Cell label="Walk-around weight" value={compact(form.walkAroundWeight)}>
+                <TextInput value={textValue(form.walkAroundWeight)} onChange={(e) => patch("walkAroundWeight", e.target.value)} placeholder="69kg" />
+              </Cell>
+              <Cell label="Weight class" value={compact(form.weightClass)}>
+                <TextInput value={textValue(form.weightClass)} onChange={(e) => patch("weightClass", e.target.value)} placeholder="66 kg" />
+              </Cell>
+              <Cell label="Fight date" value={compact(form.fightDate)}>
+                <TextInput type="date" value={textValue(form.fightDate)} onChange={(e) => patch("fightDate", e.target.value)} />
+              </Cell>
+              <Cell label="Sleep" value={compact(form.sleep)}>
+                <TextInput value={textValue(form.sleep)} onChange={(e) => patch("sleep", e.target.value)} placeholder="7h average / poor / strong" />
+              </Cell>
+              <Cell label="Readiness" value={compact(form.readiness)}>
+                <TextInput value={textValue(form.readiness)} onChange={(e) => patch("readiness", e.target.value)} placeholder="Ready / limited / watch load" />
+              </Cell>
+              <Cell label="Current status" value={compact(form.currentStatus)}>
+                <TextInput value={textValue(form.currentStatus)} onChange={(e) => patch("currentStatus", e.target.value)} placeholder="Healthy, cutting, sore knee, exam week..." />
+              </Cell>
             </div>
-          </div>
-        )}
 
-        {step === "camp" && (
-          <div className="grid gap-6">
-            <Field label="Weekly availability">
-              <TextArea
-                rows={3}
-                value={textValue(form.availability)}
-                onChange={(e) => patch("availability", e.target.value)}
-                placeholder="Every day / Mon Wed Fri evenings / school schedule..."
-              />
-            </Field>
-
-            <Field label="Injury history">
-              <TextArea
-                rows={3}
-                value={textValue(form.injuryHistory)}
-                onChange={(e) => patch("injuryHistory", e.target.value)}
-                placeholder="Knee, shoulder, ankle, back..."
-              />
-            </Field>
-
-            <Field label="Hard boundaries">
-              <TextArea
-                rows={3}
-                value={textValue(form.hardBoundaries)}
-                onChange={(e) => patch("hardBoundaries", e.target.value)}
-                placeholder="No heavy cuts below 68kg, no hard wrestling after sprint days..."
-              />
-            </Field>
-
-            <Field label="Schedule notes">
-              <TextArea
-                rows={3}
-                value={textValue(form.scheduleNotes)}
-                onChange={(e) => patch("scheduleNotes", e.target.value)}
-                placeholder="School 8–3, MMA Mon/Wed/Fri 5pm..."
-              />
-            </Field>
-
-            <Field label="Boundaries notes">
-              <TextArea
-                rows={3}
-                value={textValue(form.boundariesNotes)}
-                onChange={(e) => patch("boundariesNotes", e.target.value)}
-                placeholder="Protect knee, avoid stacking max wrestling + max sprints..."
-              />
-            </Field>
-
-            <Field label="Life load">
-              <TextArea
-                rows={3}
-                value={textValue(form.lifeLoad)}
-                onChange={(e) => patch("lifeLoad", e.target.value)}
-                placeholder="Exam season, family load, poor sleep, travel..."
-              />
-            </Field>
-          </div>
-        )}
-
-        {step === "nutrition" && (
-          <div className="grid gap-6">
-            <Field label="Diet type">
+            <Cell label="Diet type" value={compact(form.dietType)}>
               <div className="flex flex-wrap gap-2">
                 {DIET_OPTIONS.map((option) => {
                   const active = (form.dietType ?? "none") === option.value;
-
                   return (
                     <button
                       key={option.value}
                       type="button"
                       onClick={() => patch("dietType", option.value)}
                       className={cn(
-                        "rounded-full border px-4 py-2 text-sm transition",
+                        "rounded-full border px-3.5 py-2 text-xs font-semibold transition",
                         active
-                          ? "border-emerald-400/70 bg-emerald-500/15 text-emerald-100"
-                          : "border-slate-700/80 bg-slate-950/40 text-slate-200 hover:bg-slate-900/50"
+                          ? "border-amber-300/55 bg-amber-300/14 text-amber-100"
+                          : "border-white/10 bg-white/[0.035] text-white/55 hover:text-white"
                       )}
                     >
                       {option.label}
@@ -627,111 +775,65 @@ export default function ProfileForm() {
                   );
                 })}
               </div>
-            </Field>
+            </Cell>
 
-            <Field label="Allergies (one per line)">
-              <TextArea
-                rows={4}
-                value={allergiesText}
-                onChange={(e) => setAllergiesText(e.target.value)}
-                placeholder={"Peanuts\nShellfish\nEggs"}
-              />
-            </Field>
-
-            <Field label="Intolerances (one per line)">
-              <TextArea
-                rows={4}
-                value={intolerancesText}
-                onChange={(e) => setIntolerancesText(e.target.value)}
-                placeholder={"Lactose\nGluten"}
-              />
-            </Field>
-
-            <Field label="Foods you dislike (one per line)">
-              <TextArea
-                rows={4}
-                value={foodDislikesText}
-                onChange={(e) => setFoodDislikesText(e.target.value)}
-                placeholder={"Liver\nMushrooms"}
-              />
-            </Field>
-
-            <Field label="Favorite foods (one per line)">
-              <TextArea
-                rows={4}
-                value={favoriteFoodsText}
-                onChange={(e) => setFavoriteFoodsText(e.target.value)}
-                placeholder={"Rice\nChicken\nGreek yogurt"}
-              />
-            </Field>
-
-            <Field label="Foods to avoid completely (one per line)">
-              <TextArea
-                rows={4}
-                value={avoidFoodsText}
-                onChange={(e) => setAvoidFoodsText(e.target.value)}
-                placeholder={"Pork\nAlcohol\nDeep fried food"}
-              />
-            </Field>
-
-            <Field label="Religious / diet notes">
-              <TextArea
-                rows={4}
-                value={textValue(form.religiousDietNotes)}
-                onChange={(e) => patch("religiousDietNotes", e.target.value)}
-                placeholder="Halal only, no pork, no non-halal gelatin, fasting windows, kosher rules..."
-              />
-            </Field>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Cell label="Allergies" value={`${parseLines(allergiesText).length} listed`}>
+                <TextArea rows={3} value={allergiesText} onChange={(e) => setAllergiesText(e.target.value)} placeholder={"Peanuts\nShellfish"} />
+              </Cell>
+              <Cell label="Intolerances" value={`${parseLines(intolerancesText).length} listed`}>
+                <TextArea rows={3} value={intolerancesText} onChange={(e) => setIntolerancesText(e.target.value)} placeholder={"Lactose\nGluten"} />
+              </Cell>
+              <Cell label="Foods disliked" value={`${parseLines(foodDislikesText).length} listed`}>
+                <TextArea rows={3} value={foodDislikesText} onChange={(e) => setFoodDislikesText(e.target.value)} placeholder={"Liver\nMushrooms"} />
+              </Cell>
+              <Cell label="Favorite foods" value={`${parseLines(favoriteFoodsText).length} listed`}>
+                <TextArea rows={3} value={favoriteFoodsText} onChange={(e) => setFavoriteFoodsText(e.target.value)} placeholder={"Rice\nChicken\nGreek yogurt"} />
+              </Cell>
+              <Cell label="Foods to avoid" value={`${parseLines(avoidFoodsText).length} listed`}>
+                <TextArea rows={3} value={avoidFoodsText} onChange={(e) => setAvoidFoodsText(e.target.value)} placeholder={"Pork\nAlcohol\nDeep fried food"} />
+              </Cell>
+              <Cell label="Diet notes" value={form.religiousDietNotes ? "Loaded" : "None"}>
+                <TextArea rows={3} value={textValue(form.religiousDietNotes)} onChange={(e) => patch("religiousDietNotes", e.target.value)} placeholder="Halal only, fasting windows, kosher rules..." />
+              </Cell>
+            </div>
           </div>
-        )}
+        </IOSPanel>
+      )}
 
-        {(notice || error) && (
-          <div className="mt-6">
-            {notice ? (
-              <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
-                {notice}
-              </div>
-            ) : null}
+      {(notice || error) && (
+        <div>
+          {notice ? (
+            <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+              {notice}
+            </div>
+          ) : null}
 
-            {error ? (
-              <div className="rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-                {error}
-              </div>
-            ) : null}
+          {error ? (
+            <div className="rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+              {error}
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      <div className="sticky bottom-20 z-20 flex items-center justify-between gap-3 rounded-[24px] border border-white/[0.08] bg-[#030b18]/90 p-3 shadow-[0_16px_50px_rgba(0,0,0,0.35)] backdrop-blur-xl">
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35">
+            File state
           </div>
-        )}
-
-        <div className="mt-8 flex items-center justify-between gap-3 border-t border-slate-800/40 pt-6">
-          <button
-            type="button"
-            onClick={goBack}
-            disabled={currentIndex === 0}
-            className="rounded-2xl border border-slate-700/80 bg-slate-950/30 px-4 py-3 text-sm text-slate-200 transition hover:bg-slate-900/40 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Back
-          </button>
-
-          <div className="flex items-center gap-3">
-            {currentIndex < STEP_ORDER.length - 1 ? (
-              <button
-                type="button"
-                onClick={goNext}
-                className="rounded-2xl bg-emerald-400/95 px-5 py-3 text-sm font-medium text-slate-950 hover:bg-emerald-300"
-              >
-                Next step
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={saving}
-                className="rounded-2xl bg-emerald-400/95 px-5 py-3 text-sm font-medium text-slate-950 hover:bg-emerald-300 disabled:opacity-60"
-              >
-                {saving ? "Saving..." : "Save profile"}
-              </button>
-            )}
+          <div className="mt-1 truncate text-sm font-semibold text-white">
+            {compact(form.name, "Fighter file")} / {compact(form.currentFocus, "No focus locked")}
           </div>
         </div>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          className="shrink-0 rounded-[18px] bg-emerald-300 px-5 py-3 text-sm font-semibold text-[#03120d] transition hover:bg-emerald-200 active:scale-[0.98] disabled:opacity-60"
+        >
+          {saving ? "Saving..." : "Save file"}
+        </button>
       </div>
     </div>
   );

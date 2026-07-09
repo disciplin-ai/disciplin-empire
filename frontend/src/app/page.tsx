@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { createServerSupabase } from "@/lib/supabase/server";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 type SearchParams = Promise<{
   code?: string;
@@ -25,10 +25,13 @@ export default async function Home({
     redirect(`/auth/callback?${qs.toString()}`);
   }
 
-  const supabase = createServerSupabase();
-  const { data } = await supabase.auth.getUser();
+  const supabase = await createSupabaseServerClient();
 
-  if (data.user) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (user) {
     redirect("/dashboard");
   }
 

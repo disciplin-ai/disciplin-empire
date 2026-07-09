@@ -1,15 +1,18 @@
 import { redirect } from "next/navigation";
-import { createServerSupabase } from "@/lib/supabase/server";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export default async function AuthHome() {
-  const supabase = createServerSupabase();
-  const { data } = await supabase.auth.getUser();
+  const supabase = await createSupabaseServerClient();
 
-  // If logged in → go to dashboard
-  if (data.user) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  // Logged in
+  if (user) {
     redirect("/dashboard");
   }
 
-  // If not logged in → redirect to login page
+  // Not logged in
   redirect("/auth/login");
 }

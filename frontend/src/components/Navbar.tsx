@@ -12,6 +12,7 @@ function pageLabel(pathname: string | null) {
   if (pathname.startsWith("/profile")) return "Profile";
   if (pathname.startsWith("/gyms")) return "Gyms";
   if (pathname.startsWith("/membership")) return "Membership";
+  if (pathname.startsWith("/legal")) return "Legal";
   return "Dashboard";
 }
 
@@ -35,7 +36,25 @@ export default function Navbar() {
           <div className="truncate text-sm text-white/65">{label}</div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="hidden items-center gap-4 md:flex">
+          <Link
+            href="/legal/data"
+            className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/35 transition hover:text-emerald-200"
+          >
+            Data
+          </Link>
+
+          <Link
+            href="/legal/safety"
+            className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/35 transition hover:text-rose-200"
+          >
+            Safety
+          </Link>
+
+          <UserChip />
+        </div>
+
+        <div className="flex items-center gap-3 md:hidden">
           <UserChip />
         </div>
       </div>
