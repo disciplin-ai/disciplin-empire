@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { motion, type Variants } from "framer-motion";
 import { useFighterContext } from "@/hooks/useFighterContext";
 import {
   getLockState,
@@ -15,6 +16,14 @@ type WeightStatus =
   | "Off Track"
   | "No Fight Scheduled";
 
+type Tone =
+  | "neutral"
+  | "training"
+  | "fuel"
+  | "vision"
+  | "pressure"
+  | "danger";
+
 type VisionFinding = {
   id?: string;
   title: string;
@@ -25,7 +34,6 @@ type VisionFinding = {
   if_ignored?: string;
   short_detail?: string;
   detail?: string;
-  good?: string;
   unstable?: string;
   break_point?: string;
   train?: string[];
@@ -96,69 +104,108 @@ type ProofMemory = {
 const DIRECTIVE_PROGRESS_KEY = "disciplin_directive_progress";
 const LAST_PROOF_KEY = "disciplin_last_proof";
 
+const pageMotion: Variants = {
+  hidden: {
+    opacity: 0,
+    y: 10,
+  },
+  show: {
+    opacity: 1,
+    y: 0,
+    transition: {
+      duration: 0.3,
+      ease: "easeOut",
+      staggerChildren: 0.055,
+    },
+  },
+};
+
+const sectionMotion: Variants = {
+  hidden: {
+    opacity: 0,
+    y: 14,
+    scale: 0.99,
+  },
+  show: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    transition: {
+      duration: 0.28,
+      ease: "easeOut",
+    },
+  },
+};
+
 function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
 function readJson<T>(key: string): T | null {
+  if (typeof window === "undefined") return null;
+
   try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    return JSON.parse(raw) as T;
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
   } catch {
     return null;
   }
 }
 
 function writeJson<T>(key: string, value: T) {
+  if (typeof window === "undefined") return;
+
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    window.localStorage.setItem(key, JSON.stringify(value));
   } catch {}
 }
 
-function cleanSentence(text?: string | null) {
+function clean(text?: string | null) {
   return String(text || "")
     .replace(/\.{3,}|…/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function compactSentence(text?: string | null, max = 160) {
-  const clean = cleanSentence(text);
-  if (!clean) return "";
-  if (clean.length <= max) return clean;
+function short(text?: string | null, max = 120) {
+  const value = clean(text);
 
-  const sliced = clean.slice(0, max).trim();
-  const lastSpace = sliced.lastIndexOf(" ");
+  if (!value || value.length <= max) return value;
 
-  if (lastSpace > 30) return sliced.slice(0, lastSpace).trim();
-  return sliced;
+  const clipped = value.slice(0, max).trim();
+  const lastSpace = clipped.lastIndexOf(" ");
+
+  return lastSpace > 30
+    ? clipped.slice(0, lastSpace).trim()
+    : clipped;
 }
 
-function firstGoodText(...values: Array<string | null | undefined>) {
-  for (const value of values) {
-    const cleaned = cleanSentence(value);
-    if (cleaned) return cleaned;
-  }
-  return "";
-}
-
-function daysUntil(dateStr?: string | null): number | null {
+function daysUntil(dateStr?: string | null) {
   if (!dateStr) return null;
-  const now = new Date();
+
   const target = new Date(dateStr);
+
   if (Number.isNaN(target.getTime())) return null;
 
-  const ms = target.getTime() - now.getTime();
-  return Math.max(0, Math.ceil(ms / (1000 * 60 * 60 * 24)));
+  return Math.max(
+    0,
+    Math.ceil((target.getTime() - Date.now()) / 86400000)
+  );
 }
 
-function getLatestWeight(
+function latestWeight(
   logs: WeightLog[],
   fallback?: number | null
 ): number | null {
-  if (logs.length > 0) return logs[logs.length - 1].value;
-  if (typeof fallback === "number" && Number.isFinite(fallback)) return fallback;
+  if (logs.length) return logs[logs.length - 1].value;
+
+  if (
+    typeof fallback === "number" &&
+    Number.isFinite(fallback)
+  ) {
+    return fallback;
+  }
+
   return null;
 }
 
@@ -169,604 +216,577 @@ function buildWeightStatus(args: {
 }): WeightStatus {
   const { currentWeight, targetWeight, daysRemaining } = args;
 
-  if (daysRemaining === null) return "No Fight Scheduled";
-  if (currentWeight === null || targetWeight === null)
+  if (
+    daysRemaining === null ||
+    currentWeight === null ||
+    targetWeight === null
+  ) {
     return "No Fight Scheduled";
+  }
 
-  const diff = currentWeight - targetWeight;
-  if (diff <= 0.5) return "On Track";
+  const difference = currentWeight - targetWeight;
 
-  const requiredPerDay = diff / Math.max(daysRemaining, 1);
+  if (difference <= 0.5) return "On Track";
+
+  const requiredPerDay =
+    difference / Math.max(daysRemaining, 1);
+
   if (requiredPerDay <= 0.35) return "On Track";
   if (requiredPerDay <= 0.6) return "Slightly Behind";
+
   return "Off Track";
 }
 
-function statusTone(status: WeightStatus): "good" | "warn" | "bad" | "neutral" {
-  if (status === "On Track") return "good";
-  if (status === "Slightly Behind") return "warn";
-  if (status === "Off Track") return "bad";
+function toneForWeight(status: WeightStatus): Tone {
+  if (status === "On Track") return "training";
+  if (status === "Slightly Behind") return "fuel";
+  if (status === "Off Track") return "danger";
+
   return "neutral";
 }
 
-function getFuelTone(score?: number): "good" | "warn" | "bad" | "neutral" {
+function toneForFuel(score?: number): Tone {
   if (typeof score !== "number") return "neutral";
-  if (score >= 75) return "good";
-  if (score >= 50) return "warn";
-  return "bad";
+  if (score >= 75) return "training";
+  if (score >= 50) return "fuel";
+
+  return "danger";
 }
 
-function fuelStatusLine(score?: number) {
-  if (typeof score !== "number") return "No recent Fuel analysis.";
-  if (score >= 80) return "Fuel support is strong for current camp load.";
-  if (score >= 60) return "Fuel support is acceptable, but can be tighter.";
-  if (score >= 40)
-    return "Fuel support is under target for reliable camp output.";
-  return "Fuel support is weak and likely hurting recovery or performance.";
-}
-
-function fuelSnippet(report?: string) {
-  const text = cleanSentence(report);
-  if (!text)
-    return "Run Fuel AI to generate a nutrition report tied to your training.";
-  return compactSentence(text, 120);
-}
-
-function severityTone(
+function toneForSeverity(
   severity?: VisionFinding["severity"]
-): "good" | "warn" | "bad" | "neutral" {
-  if (severity === "HIGH") return "bad";
-  if (severity === "MEDIUM") return "warn";
-  if (severity === "LOW") return "good";
+): Tone {
+  if (severity === "HIGH") return "danger";
+  if (severity === "MEDIUM") return "fuel";
+  if (severity === "LOW") return "training";
+
   return "neutral";
 }
 
-function badgeToneForLoad(
-  load?: CampControl["trainingLoad"]
-): "neutral" | "good" | "warn" | "bad" {
-  if (load === "LOW") return "good";
-  if (load === "MODERATE") return "warn";
-  if (load === "HIGH") return "bad";
-  return "neutral";
-}
+function fallbackStop(title?: string, detail?: string) {
+  const text = `${title || ""} ${detail || ""}`.toLowerCase();
 
-function fallbackInterrupt(title?: string, detail?: string) {
-  const t = String(title || "").toLowerCase();
-  const d = String(detail || "").toLowerCase();
+  if (text.includes("hips")) return "Hips under you.";
+  if (text.includes("head")) return "Get your head inside.";
 
-  if (t.includes("hips") || d.includes("hips"))
-    return "Stop. Hips under you now.";
-  if (t.includes("head") || d.includes("head"))
-    return "Stop. Head up before contact.";
-  if (t.includes("hand") || t.includes("reach") || d.includes("reach"))
-    return "Stop reaching. Feet first.";
-  if (t.includes("trail leg") || d.includes("trail leg"))
-    return "Stop. Bring the trail leg under.";
-  if (t.includes("foot") || d.includes("foot"))
-    return "Stop. Bring the back foot up.";
-
-  return "Stop. Fix position before continuing.";
-}
-
-function fallbackFixNextRep(title?: string, detail?: string) {
-  const t = String(title || "").toLowerCase();
-  const d = String(detail || "").toLowerCase();
-
-  if (t.includes("hips") || d.includes("hips")) {
-    return "Step deep. Drop the knee. Bring hips under before reaching.";
+  if (text.includes("hand") || text.includes("reach")) {
+    return "Feet first. Stop reaching.";
   }
-  if (t.includes("head") || d.includes("head")) {
-    return "Head up, connected, then drive through the finish.";
-  }
-  if (t.includes("hand") || t.includes("reach") || d.includes("reach")) {
-    return "Move feet first. Do not let the hands chase the shot.";
-  }
+
   if (
-    t.includes("trail leg") ||
-    d.includes("trail leg") ||
-    t.includes("back foot")
+    text.includes("trail leg") ||
+    text.includes("back foot")
   ) {
-    return "After penetration, immediately step your trail foot up under your hips before adjusting the finish.";
+    return "Bring the back foot up.";
   }
 
-  return "Restore structure first. Then continue the rep.";
+  return "Fix position before continuing.";
 }
 
-function buildWhyItMatters(primary: VisionFinding | null, summary?: string) {
-  if (!primary)
-    return "Run Vision again to generate a tighter correction summary.";
+function fallbackNext(title?: string, detail?: string) {
+  const text = `${title || ""} ${detail || ""}`.toLowerCase();
 
-  const text = firstGoodText(
-    primary.dashboard_detail,
-    primary.unstable,
-    primary.break_point,
-    primary.detail,
-    primary.short_detail,
-    summary
-  );
+  if (text.includes("hips")) {
+    return "Step deep. Put the hips under.";
+  }
 
-  if (text) return compactSentence(text, 150);
+  if (text.includes("head")) {
+    return "Head on the ribs. Finish the shot.";
+  }
 
-  return "This correction is costing structure and making the exchange easier to stop.";
+  if (text.includes("hand") || text.includes("reach")) {
+    return "Move the feet before the hands.";
+  }
+
+  if (
+    text.includes("trail leg") ||
+    text.includes("back foot")
+  ) {
+    return "Step the back foot underneath.";
+  }
+
+  return "Restore position. Continue.";
 }
 
-function buildIfIgnored(primary: VisionFinding | null) {
-  if (!primary) return "You lose the exchange before the finish is established.";
+function fuelDecision(score?: number) {
+  if (typeof score !== "number") {
+    return "Log Fuel before hard training.";
+  }
 
-  const text = firstGoodText(
-    primary.if_ignored,
-    primary.break_point,
-    primary.short_detail
-  );
+  if (score >= 75) {
+    return "Push the planned session.";
+  }
 
-  if (text) return compactSentence(text, 140);
+  if (score >= 50) {
+    return "Train. Keep the load controlled.";
+  }
 
-  return "Opponent gets the defensive answer before the finish is established.";
+  return "Technique only. Do not push volume.";
 }
 
-function buildTrainToday(
-  topCorrection: VisionFinding | null,
-  session: DailySession | null,
-  camp: SavedCamp | null
-) {
-  if (topCorrection?.train?.length) {
-    return topCorrection.train
-      .slice(0, 2)
-      .map((item) => cleanSentence(item))
-      .filter(Boolean);
-  }
-  if (session?.blocks?.length) {
-    return session.blocks.slice(0, 4).map((item) => cleanSentence(item));
+function pressureDecision(progress: DirectiveProgress) {
+  if (progress.repeatedFailureCount <= 0) {
+    return "No repeat break.";
   }
 
-  const title = String(topCorrection?.title || "").toLowerCase();
-
-  if (title.includes("hips")) {
-    return [
-      "Paused penetration steps with hips under shoulders.",
-      "Freeze-and-continue entries focused on posture.",
-      "Wall shots focused only on hip line and drive.",
-      "Light shadow reps on the same correction.",
-    ];
+  if (progress.repeatedFailureCount === 1) {
+    return "Same break repeated.";
   }
 
-  if (title.includes("hand") || title.includes("reach")) {
-    return [
-      "Feet-first entry reps.",
-      "Re-attack shots without reaching.",
-      "Hand discipline against light reaction defense.",
-      "Shadow reps with strict hand timing.",
-    ];
+  if (progress.repeatedFailureCount === 2) {
+    return "Habit forming.";
   }
 
-  if (title.includes("trail leg") || title.includes("back foot")) {
-    return [
-      "Penetration-to-trail-foot recovery reps.",
-      "Freeze after the knee, then step the back foot up.",
-      "Finish chains focused only on base recovery.",
-      "Shadow reps on stepping the trail foot under the hips.",
-    ];
-  }
-
-  const primary = camp?.trainingFocus?.primary ?? [];
-  if (primary.length) return primary.slice(0, 4).map((item) => cleanSentence(item));
-
-  return [
-    "Build camp in Sensei.",
-    "Run one technical block instead of random rounds.",
-    "Carry one correction through the full session.",
-    "Retest the same issue after the session.",
-  ];
+  return "Pattern protected.";
 }
 
-function buildCoachNotes(camp: SavedCamp | null, fuelLoaded: boolean) {
-  const notes: string[] = [];
-
-  if (camp?.directive?.bullets?.length) {
-    notes.push(...camp.directive.bullets.slice(0, 2));
-  }
-  if (camp?.control?.warnings?.length) {
-    notes.push(...camp.control.warnings.slice(0, 1));
-  }
-  if (!fuelLoaded) {
-    notes.push(
-      "No Fuel data loaded: training decisions are being made without nutrition or recovery context."
-    );
+function proofDecision(progress: DirectiveProgress) {
+  if (progress.proofType === "none") {
+    return "Proof missing.";
   }
 
-  return notes.slice(0, 3).map((item) => cleanSentence(item));
-}
-
-function escalationLine(progress: DirectiveProgress) {
-  if (progress.repeatedFailureCount <= 0) return "Initial detection.";
-  if (progress.repeatedFailureCount === 1) return "Same break repeated.";
-  if (progress.repeatedFailureCount === 2) return "Habit forming.";
-  return "Pattern is being protected.";
-}
-
-function proofLine(progress: DirectiveProgress) {
-  if (progress.proofType === "self_report")
+  if (progress.proofType === "self_report") {
     return "Self-report does not unlock.";
-  if (progress.proofType === "none") return "Proof missing.";
-    return `Proof loaded: ${progress.proofType}.`;
-}
-
-function buildSuccessToday(progress: DirectiveProgress) {
-  return [
-    `Hit ${progress.repsRequired} clean reps under resistance.`,
-    "Keep the correction intact under real reaction.",
-    "Submit proof through image, video, or metrics.",
-  ];
-}
-
-function buildBannedToday(primaryCorrection: VisionFinding | null) {
-  const correctionTitle = cleanSentence(primaryCorrection?.title).toLowerCase();
-
-  if (correctionTitle.includes("hips")) {
-    return [
-      "No random live wars before position is stable.",
-      "No reaching while hips are behind.",
-      "No secondary flaws before this holds.",
-    ];
   }
 
-  if (correctionTitle.includes("hand") || correctionTitle.includes("reach")) {
-    return [
-      "No hands before feet.",
-      "No volume reps that reinforce the entry.",
-      "No pretending clean drilling equals live transfer.",
-    ];
-  }
-
-  return [
-    "No variety chasing.",
-    "No new themes before verification.",
-    "No calling repetition progress.",
-  ];
+  return `Proof loaded: ${progress.proofType}.`;
 }
 
-function Badge({
+function toneStyles(tone: Tone) {
+  if (tone === "training") {
+    return {
+      border: "border-emerald-300/20",
+      background: "bg-emerald-300/[0.08]",
+      text: "text-emerald-100",
+      dot: "bg-emerald-300",
+      stroke: "#6ee7b7",
+    };
+  }
+
+  if (tone === "fuel") {
+    return {
+      border: "border-amber-300/18",
+      background: "bg-amber-300/[0.06]",
+      text: "text-amber-100",
+      dot: "bg-amber-300",
+      stroke: "#fbbf24",
+    };
+  }
+
+  if (tone === "vision") {
+    return {
+      border: "border-cyan-200/18",
+      background: "bg-cyan-200/[0.06]",
+      text: "text-cyan-100",
+      dot: "bg-cyan-200",
+      stroke: "#a5f3fc",
+    };
+  }
+
+  if (tone === "pressure") {
+    return {
+      border: "border-violet-300/18",
+      background: "bg-violet-300/[0.06]",
+      text: "text-violet-100",
+      dot: "bg-violet-300",
+      stroke: "#c4b5fd",
+    };
+  }
+
+  if (tone === "danger") {
+    return {
+      border: "border-rose-300/20",
+      background: "bg-rose-300/[0.07]",
+      text: "text-rose-100",
+      dot: "bg-rose-300",
+      stroke: "#fda4af",
+    };
+  }
+
+  return {
+    border: "border-white/[0.08]",
+    background: "bg-white/[0.035]",
+    text: "text-white/62",
+    dot: "bg-white/35",
+    stroke: "#ffffff",
+  };
+}
+function StatusBadge({
   children,
   tone = "neutral",
+  pulse = false,
 }: {
   children: React.ReactNode;
-  tone?: "neutral" | "good" | "warn" | "bad" | "locked" | "recovery" | "psych";
+  tone?: Tone;
+  pulse?: boolean;
 }) {
-  const cls =
-    tone === "good"
-      ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
-      : tone === "warn"
-      ? "border-amber-400/25 bg-amber-400/10 text-amber-100"
-      : tone === "bad"
-      ? "border-rose-400/25 bg-rose-400/10 text-rose-100"
-      : tone === "locked"
-      ? "border-yellow-300/30 bg-yellow-300/10 text-yellow-100"
-      : tone === "recovery"
-      ? "border-cyan-300/25 bg-cyan-300/10 text-cyan-100"
-      : tone === "psych"
-      ? "border-violet-300/25 bg-violet-300/10 text-violet-100"
-      : "border-white/[0.08] bg-white/[0.04] text-white/65";
+  const styles = toneStyles(tone);
 
   return (
-        <span
+    <motion.span
       suppressHydrationWarning
+      animate={
+        pulse
+          ? {
+              opacity: [0.72, 1, 0.72],
+            }
+          : undefined
+      }
+      transition={
+        pulse
+          ? {
+              duration: 2.2,
+              repeat: Infinity,
+              ease: "easeInOut",
+            }
+          : undefined
+      }
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold tracking-wide",
-        cls
+        "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.16em]",
+        styles.border,
+        styles.background,
+        styles.text
       )}
     >
+      <span
+        className={cn(
+          "h-1.5 w-1.5 rounded-full",
+          styles.dot
+        )}
+      />
+
       {children}
-    </span>
+    </motion.span>
   );
 }
 
-function StatusDot({ tone }: { tone: "good" | "warn" | "bad" | "neutral" }) {
-  const cls =
-    tone === "good"
-      ? "bg-emerald-300"
-      : tone === "warn"
-      ? "bg-amber-300"
-      : tone === "bad"
-      ? "bg-rose-300"
-      : "bg-white/30";
+function ProgressRing({
+  value,
+  max,
+  label,
+  caption,
+  tone = "training",
+  size = 116,
+}: {
+  value: number;
+  max: number;
+  label: string;
+  caption: string;
+  tone?: Tone;
+  size?: number;
+}) {
+  const styles = toneStyles(tone);
+  const radius = 45;
+  const circumference = 2 * Math.PI * radius;
+  const percentage = Math.min(
+    1,
+    Math.max(0, value / Math.max(max, 1))
+  );
+  const offset = circumference * (1 - percentage);
 
-  return <span className={cn("h-1.5 w-1.5 rounded-full", cls)} />;
+  return (
+    <div
+      className="relative shrink-0"
+      style={{
+        width: size,
+        height: size,
+      }}
+    >
+      <svg
+        viewBox="0 0 110 110"
+        className="-rotate-90"
+        aria-hidden="true"
+      >
+        <circle
+          cx="55"
+          cy="55"
+          r={radius}
+          fill="none"
+          stroke="rgba(255,255,255,0.07)"
+          strokeWidth="7"
+        />
+
+        <motion.circle
+          cx="55"
+          cy="55"
+          r={radius}
+          fill="none"
+          stroke={styles.stroke}
+          strokeWidth="7"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          initial={{ strokeDashoffset: circumference }}
+          animate={{ strokeDashoffset: offset }}
+          transition={{
+            duration: 0.8,
+            ease: "easeOut",
+          }}
+        />
+      </svg>
+
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+        <div className="text-xl font-bold tracking-[-0.03em] text-white">
+          {label}
+        </div>
+
+        <div className="mt-0.5 max-w-[72px] text-[9px] font-semibold uppercase tracking-[0.12em] text-white/38">
+          {caption}
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function AppCard({
+function Panel({
   title,
-  sub,
+  label,
   right,
   children,
-  strong = false,
-  compact = false,
   tone = "neutral",
+  className,
 }: {
   title: string;
-  sub?: string;
+  label?: string;
   right?: React.ReactNode;
   children: React.ReactNode;
-  strong?: boolean;
-  compact?: boolean;
-  tone?: "neutral" | "training" | "fuel" | "recovery" | "psych" | "danger" | "locked";
+  tone?: Tone;
+  className?: string;
 }) {
-  const toneRing =
-    tone === "training"
-      ? "border-emerald-400/18"
-      : tone === "fuel"
-      ? "border-amber-300/20"
-      : tone === "recovery"
-      ? "border-cyan-300/18"
-      : tone === "psych"
-      ? "border-violet-300/18"
-      : tone === "danger"
-      ? "border-rose-400/22"
-      : tone === "locked"
-      ? "border-yellow-300/22"
-      : "border-white/[0.08]";
+  const styles = toneStyles(tone);
 
   return (
-    <section
+    <motion.section
+      variants={sectionMotion}
+      whileHover={{
+        y: -2,
+      }}
+      transition={{
+        type: "spring",
+        stiffness: 380,
+        damping: 30,
+      }}
       className={cn(
-        "group rounded-[28px] border shadow-[0_18px_70px_rgba(0,0,0,0.34)] backdrop-blur-xl transition duration-300 hover:-translate-y-0.5 hover:border-white/16",
-        compact ? "p-4" : "p-5",
-        strong
-          ? "bg-[radial-gradient(circle_at_top_left,rgba(52,211,153,0.16),transparent_34%),linear-gradient(145deg,rgba(15,31,55,0.94),rgba(3,11,24,0.96)_58%,rgba(2,8,16,0.98))]"
-          : "bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.025))]",
-        toneRing
+        "overflow-hidden rounded-[24px] border bg-[#0b111a]/92 shadow-[0_18px_60px_rgba(0,0,0,0.28)]",
+        styles.border,
+        className
       )}
     >
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start justify-between gap-4 px-5 pb-3 pt-4">
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-white">{title}</div>
-          {sub ? <div className="mt-1 text-xs leading-5 text-white/45">{sub}</div> : null}
+          {label ? (
+            <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/34">
+              {label}
+            </p>
+          ) : null}
+
+          <h2 className="mt-1 text-base font-semibold text-white">
+            {title}
+          </h2>
         </div>
+
         {right}
       </div>
-      <div className={compact ? "mt-3" : "mt-5"}>{children}</div>
-    </section>
+
+      <div className="px-5 pb-5">{children}</div>
+    </motion.section>
   );
 }
 
-function BulletList({
-  items,
-  tone = "emerald",
-  compact = false,
+function SignalRow({
+  label,
+  value,
+  tone = "neutral",
 }: {
-  items: string[];
-  tone?: "emerald" | "amber" | "rose" | "cyan" | "violet";
-  compact?: boolean;
+  label: string;
+  value: React.ReactNode;
+  tone?: Tone;
 }) {
-  const dotClass =
-    tone === "amber"
-      ? "bg-amber-300/80"
-      : tone === "rose"
-      ? "bg-rose-300/80"
-      : tone === "cyan"
-      ? "bg-cyan-300/80"
-      : tone === "violet"
-      ? "bg-violet-300/80"
-      : "bg-emerald-300/80";
+  const styles = toneStyles(tone);
 
   return (
-    <ul
-      className={cn(
-        "text-sm text-white/86",
-        compact ? "space-y-1.5" : "space-y-2.5"
-      )}
-    >
-      {items.map((item, i) => (
-        <li key={i} className="flex min-w-0 items-start gap-2">
-          <span
-            className={cn("mt-2 h-1.5 w-1.5 shrink-0 rounded-full", dotClass)}
-          />
-          <span className="min-w-0 whitespace-normal break-words leading-7">
-            {cleanSentence(item)}
-          </span>
-        </li>
-      ))}
-    </ul>
-  );
-}
+    <div className="flex min-h-[58px] items-center justify-between gap-4 border-t border-white/[0.06] py-3 first:border-t-0">
+      <div className="flex min-w-0 items-center gap-2">
+        <span
+          className={cn(
+            "h-2 w-2 shrink-0 rounded-full",
+            styles.dot
+          )}
+        />
 
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-[20px] border border-white/[0.07] bg-black/24 p-3">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/38">
-        {label}
+        <span className="truncate text-xs font-semibold text-white/46">
+          {label}
+        </span>
       </div>
-      <div suppressHydrationWarning className="mt-2 text-sm font-semibold text-white">
+
+      <div
+        suppressHydrationWarning
+        className="min-w-0 text-right text-sm font-semibold text-white"
+      >
         {value}
       </div>
     </div>
   );
 }
 
-function ActionButton({
+function ActionLink({
   href,
-  label,
+  children,
   strong = false,
-  disabled = false,
 }: {
   href: string;
-  label: string;
+  children: React.ReactNode;
   strong?: boolean;
-  disabled?: boolean;
 }) {
-  if (disabled) {
-    return (
-      <div
+  return (
+    <motion.div whileTap={{ scale: 0.98 }}>
+      <Link
+        href={href}
         className={cn(
-          "rounded-[20px] border px-4 py-3 text-center text-sm opacity-50",
+          "flex min-h-12 w-full items-center justify-center rounded-full border px-5 py-3 text-sm font-bold transition",
           strong
-            ? "border-emerald-400/10 bg-emerald-500/8 text-emerald-50"
-            : "border-white/[0.07] bg-black/25 text-white"
+            ? "border-emerald-200/30 bg-emerald-300 text-[#03120d] shadow-[0_12px_32px_rgba(52,211,153,0.14)] hover:bg-emerald-200"
+            : "border-white/[0.10] bg-white/[0.045] text-white hover:bg-white/[0.08]"
         )}
       >
-        {label}
-      </div>
-    );
-  }
-
-  return (
-    <Link
-      href={href}
-      className={cn(
-        "rounded-[20px] border px-4 py-3 text-center text-sm transition duration-200 active:scale-[0.98]",
-        strong
-          ? "border-emerald-300/25 bg-emerald-300 font-semibold text-[#03120d] shadow-[0_16px_40px_rgba(52,211,153,0.18)] hover:bg-emerald-200"
-          : "border-white/[0.08] bg-white/[0.045] text-white hover:border-white/18 hover:bg-white/[0.07]"
-      )}
-    >
-      {label}
-    </Link>
+        {children}
+      </Link>
+    </motion.div>
   );
 }
 
-function RepDots({
-  completed,
-  required,
-}: {
-  completed: number;
-  required: number;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      {Array.from({ length: required }).map((_, i) => {
-        const filled = i < completed;
-        return (
-          <span
-            key={i}
-            className={cn(
-              "h-4 w-4 rounded-full border transition duration-300",
-              filled
-                ? "border-emerald-300 bg-emerald-300 shadow-[0_0_20px_rgba(52,211,153,0.35)]"
-                : "border-white/14 bg-white/[0.035]"
-            )}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
-function ModuleLink({
+function ModuleTile({
   href,
   label,
-  symbol,
+  value,
+  command,
   tone,
-  state,
 }: {
   href: string;
   label: string;
-  symbol: string;
-  tone: "training" | "fuel" | "recovery" | "psych" | "locked";
-  state: string;
+  value: string;
+  command: string;
+  tone: Tone;
 }) {
-  const dotClass =
-    tone === "training"
-      ? "bg-emerald-300"
-      : tone === "fuel"
-      ? "bg-amber-300"
-      : tone === "recovery"
-      ? "bg-cyan-200"
-      : tone === "psych"
-      ? "bg-violet-300"
-      : "bg-yellow-300";
+  const styles = toneStyles(tone);
 
   return (
-    <Link
-      href={href}
-      className="group flex min-h-[68px] items-center gap-3 rounded-[18px] px-3 py-3 transition duration-200 hover:bg-white/[0.07] active:scale-[0.98]"
+    <motion.div
+      variants={sectionMotion}
+      whileTap={{ scale: 0.985 }}
+      className="min-w-[230px] flex-1 snap-start"
     >
-      <div className="relative grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-white/10 bg-white/[0.055] text-[17px] font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
-        <span className="leading-none">{symbol}</span>
-        <span
-          className={cn(
-            "absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-[#050b14]",
-            dotClass
-          )}
-        />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] font-semibold text-white">
-          {label}
+      <Link
+        href={href}
+        className={cn(
+          "block h-full rounded-[24px] border bg-[#0b111a]/94 p-4 transition hover:bg-[#101823]",
+          styles.border
+        )}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <StatusBadge tone={tone}>{label}</StatusBadge>
+
+          <span className="text-lg text-white/30">›</span>
         </div>
-        <div className="mt-0.5 truncate text-[11px] font-medium text-white/50">
-          {state}
-        </div>
-      </div>
-      <div className="text-[18px] text-white/25 transition group-hover:translate-x-0.5 group-hover:text-white/55">
-        ›
-      </div>
-    </Link>
+
+        <p className="mt-5 text-2xl font-bold tracking-[-0.03em] text-white">
+          {value}
+        </p>
+
+        <p className="mt-2 text-sm leading-6 text-white/48">
+          {command}
+        </p>
+      </Link>
+    </motion.div>
+  );
+}
+
+function CommandList({
+  items,
+  tone = "training",
+}: {
+  items: string[];
+  tone?: Tone;
+}) {
+  const styles = toneStyles(tone);
+
+  return (
+    <div className="divide-y divide-white/[0.06]">
+      {items.map((item, index) => (
+        <motion.div
+          key={`${item}-${index}`}
+          variants={sectionMotion}
+          className="flex gap-3 py-3 first:pt-0 last:pb-0"
+        >
+          <span
+            className={cn(
+              "mt-2 h-1.5 w-1.5 shrink-0 rounded-full",
+              styles.dot
+            )}
+          />
+
+          <p className="text-sm leading-6 text-white/76">
+            {clean(item)}
+          </p>
+        </motion.div>
+      ))}
+    </div>
   );
 }
 
 export default function DashboardClient() {
   const { fighterContext } = useFighterContext();
+
   const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
   const [camp, setCamp] = useState<SavedCamp | null>(null);
   const [vision, setVision] = useState<VisionAnalysis | null>(null);
   const [fuel, setFuel] = useState<FuelMemory | null>(null);
   const [weightLogs, setWeightLogs] = useState<WeightLog[]>([]);
   const [weightInput, setWeightInput] = useState("");
-  const [showSupporting, setShowSupporting] = useState(false);
-  const [showSystems, setShowSystems] = useState(false);
-  const [latestProof, setLatestProof] = useState<ProofMemory | null>(null);
+  const [latestProof, setLatestProof] =
+    useState<ProofMemory | null>(null);
 
-  const [directiveProgress, setDirectiveProgress] = useState<DirectiveProgress>(
-    normalizeDirectiveProgress(
-      readJson<DirectiveProgress>(DIRECTIVE_PROGRESS_KEY) ?? undefined
-    )
-  );
+  const [directiveProgress, setDirectiveProgress] =
+    useState<DirectiveProgress>(
+      normalizeDirectiveProgress(undefined)
+    );
 
   useEffect(() => {
+    setMounted(true);
     setCamp(readJson<SavedCamp>("disciplin_latest_camp"));
-    setVision(readJson<VisionAnalysis>("disciplin_latest_vision"));
+    setVision(
+      readJson<VisionAnalysis>("disciplin_latest_vision")
+    );
     setFuel(readJson<FuelMemory>("disciplin_latest_fuel"));
-    setWeightLogs(readJson<WeightLog[]>("disciplin_weight_logs") ?? []);
-    setLatestProof(readJson<ProofMemory>(LAST_PROOF_KEY));
+    setWeightLogs(
+      readJson<WeightLog[]>("disciplin_weight_logs") ?? []
+    );
+    setLatestProof(
+      readJson<ProofMemory>(LAST_PROOF_KEY)
+    );
+
+    setDirectiveProgress(
+      normalizeDirectiveProgress(
+        readJson<DirectiveProgress>(
+          DIRECTIVE_PROGRESS_KEY
+        ) ?? undefined
+      )
+    );
   }, []);
 
   useEffect(() => {
-    writeJson(DIRECTIVE_PROGRESS_KEY, directiveProgress);
-  }, [directiveProgress]);
+    if (!mounted) return;
 
-  const fightDate = fighterContext.camp.fightDate;
-  const weightClass = fighterContext.identity.weightClass ?? "Not set";
-  const profileCurrentWeight = fighterContext.identity.currentWeight;
-  const targetWeight = fighterContext.identity.targetWeight;
-
-  const currentWeight = getLatestWeight(weightLogs, profileCurrentWeight);
-  const daysRemaining = daysUntil(fightDate);
-
-  const weightStatus = buildWeightStatus({
-    currentWeight,
-    targetWeight,
-    daysRemaining,
-  });
-
-  const weightDifference =
-    currentWeight !== null && typeof targetWeight === "number"
-      ? Number((currentWeight - targetWeight).toFixed(1))
-      : null;
-
-  const progressPct =
-    currentWeight !== null && typeof targetWeight === "number"
-      ? Math.max(
-          0,
-          Math.min(100, 100 - Math.max(0, currentWeight - targetWeight) * 8)
-        )
-      : 0;
+    writeJson(
+      DIRECTIVE_PROGRESS_KEY,
+      directiveProgress
+    );
+  }, [directiveProgress, mounted]);
 
   const findings = useMemo(
-    () => (Array.isArray(vision?.findings) ? vision.findings : []),
+    () =>
+      Array.isArray(vision?.findings)
+        ? vision.findings
+        : [],
     [vision]
   );
 
@@ -775,70 +795,106 @@ export default function DashboardClient() {
 
   const lockState = getLockState({
     directive: {
-      present: !!primaryCorrection?.title,
+      present: Boolean(primaryCorrection?.title),
       correction: primaryCorrection?.title || null,
     },
     progress: directiveProgress,
-      });
+  });
 
-  const correctionInterrupt =
+  const currentWeight = latestWeight(
+    weightLogs,
+    fighterContext.identity.currentWeight
+  );
+
+  const targetWeight =
+    fighterContext.identity.targetWeight ?? null;
+
+  const daysRemaining = daysUntil(
+    fighterContext.camp.fightDate
+  );
+
+  const weightStatus = buildWeightStatus({
+    currentWeight,
+    targetWeight,
+    daysRemaining,
+  });
+
+  const repsRemaining = Math.max(
+    0,
+    directiveProgress.repsRequired -
+      directiveProgress.repsCompleted
+  );
+
+  const proofPercent = Math.round(
+    (directiveProgress.repsCompleted /
+      Math.max(directiveProgress.repsRequired, 1)) *
+      100
+  );
+
+  const stopCommand =
     primaryCorrection?.interrupt ||
-    fallbackInterrupt(primaryCorrection?.title, primaryCorrection?.detail);
+    fallbackStop(
+      primaryCorrection?.title,
+      primaryCorrection?.detail
+    );
 
-  const fixNextRep =
+  const nextRep =
     primaryCorrection?.fix_next_rep ||
-    fallbackFixNextRep(primaryCorrection?.title, primaryCorrection?.detail);
+    fallbackNext(
+      primaryCorrection?.title,
+      primaryCorrection?.detail
+    );
 
-  const whyItMatters = buildWhyItMatters(primaryCorrection, vision?.summary);
-  const costIfIgnored = buildIfIgnored(primaryCorrection);
+  const nextAction = !primaryCorrection
+    ? "Run Vision before training."
+    : lockState.locked && repsRemaining > 0
+      ? `Prove ${repsRemaining} clean ${
+          repsRemaining === 1 ? "rep" : "reps"
+        }.`
+      : lockState.locked
+        ? "Submit proof to clear the lock."
+        : "Open the next correction.";
 
-  const executionBlocks = buildTrainToday(
-    primaryCorrection,
-    camp?.dailySession ?? null,
-    camp
-  );
+  const sessionTitle =
+    camp?.dailySession?.title || "Correction session";
 
-  const coachNotes = useMemo(
-    () => buildCoachNotes(camp, !!fuel?.score || !!fuel?.report),
-    [camp, fuel]
-  );
-
-  const successToday = buildSuccessToday(directiveProgress);
-  const bannedToday = buildBannedToday(primaryCorrection);
-
-  function handleLogWeight() {
-    const value = Number(weightInput);
-    if (!Number.isFinite(value) || value <= 0) return;
-
-    const next: WeightLog[] = [
-      ...weightLogs,
-      {
-        value,
-        loggedAt: new Date().toISOString(),
-      },
+  const sessionBlocks =
+    primaryCorrection?.train?.slice(0, 3) ||
+    camp?.dailySession?.blocks?.slice(0, 3) ||
+    [
+      "One correction.",
+      "One session.",
+      "No variety chasing.",
     ];
 
-    setWeightLogs(next);
-    localStorage.setItem("disciplin_weight_logs", JSON.stringify(next));
-    setWeightInput("");
-  }
+  const commandFeed = [
+    primaryCorrection
+      ? `Sensei: ${short(nextRep, 100)}`
+      : "Sensei: run Vision before training.",
+    lockState.locked
+      ? `Lock: ${directiveProgress.repsCompleted}/${directiveProgress.repsRequired} clean reps.`
+      : "Lock: clear.",
+    `Fuel: ${fuelDecision(fuel?.score)}`,
+    `Pressure: ${pressureDecision(
+      directiveProgress
+    )}`,
+  ];
 
-  function updateDirectiveProgress(
+  function updateProgress(
     patch:
       | Partial<DirectiveProgress>
-      | ((prev: DirectiveProgress) => DirectiveProgress)
+      | ((
+          previous: DirectiveProgress
+        ) => DirectiveProgress)
   ) {
-    setDirectiveProgress((prev: DirectiveProgress) => {
+    setDirectiveProgress((previous) => {
       const next =
         typeof patch === "function"
-          ? patch(prev)
-          : {
-              ...prev,
-              ...patch,
-            };
+          ? patch(previous)
+          : { ...previous, ...patch };
 
       return normalizeDirectiveProgress({
-        ...prev,
+        ...previous,
         ...next,
         updatedAt: new Date().toISOString(),
       });
@@ -857,6 +913,7 @@ export default function DashboardClient() {
 
     reader.onload = () => {
       const dataUrl = String(reader.result || "");
+
       if (!dataUrl) return;
 
       const proof: ProofMemory = {
@@ -869,694 +926,645 @@ export default function DashboardClient() {
       writeJson(LAST_PROOF_KEY, proof);
       setLatestProof(proof);
 
-      updateDirectiveProgress((prev: DirectiveProgress) => ({
-        ...prev,
-        repsCompleted: Math.min(prev.repsCompleted + 1, prev.repsRequired),
+      updateProgress((previous) => ({
+        ...previous,
+        repsCompleted: Math.min(
+          previous.repsCompleted + 1,
+          previous.repsRequired
+        ),
         proofType: isVideo ? "video" : "image",
-        updatedAt: new Date().toISOString(),
       }));
     };
 
     reader.readAsDataURL(file);
   }
 
-  const sessionTitle = camp?.dailySession?.title || "Correction session";
+  function handleLogWeight() {
+    const value = Number(weightInput);
 
-  const sessionMeta = camp?.dailySession
-    ? `${camp.dailySession.timingLabel} · Goal: ${camp.dailySession.goal}`
-    : "One correction. One session. No variety chasing.";
+    if (!Number.isFinite(value) || value <= 0) return;
 
-  const repsRemaining = Math.max(
-    0,
-    directiveProgress.repsRequired - directiveProgress.repsCompleted
-  );
+    const nextLogs = [
+      ...weightLogs,
+      {
+        value,
+        loggedAt: new Date().toISOString(),
+      },
+    ];
 
-  const proofPercent = Math.round(
-    (directiveProgress.repsCompleted /
-      Math.max(directiveProgress.repsRequired, 1)) *
-      100
-  );
-
-  const pressureTone =
-    directiveProgress.repeatedFailureCount >= 2
-      ? "bad"
-      : directiveProgress.repeatedFailureCount === 1
-      ? "warn"
-      : "neutral";
-
-  const recoveryLabel =
-    fuel?.score === undefined
-      ? "No recovery profile"
-      : fuel.score >= 75
-      ? "Ready"
-      : fuel.score >= 50
-      ? "Watch load"
-      : "Protect recovery";
-
-  const nextAction = lockState.locked
-    ? repsRemaining > 0
-      ? `Prove ${repsRemaining} clean rep${repsRemaining === 1 ? "" : "s"} under resistance.`
-      : "Submit proof to clear the lock."
-    : "Open the next correction layer.";
-
-  const commandFeed = [
-    primaryCorrection
-      ? `Sensei: ${compactSentence(fixNextRep, 100)}`
-      : "Sensei: upload a Vision clip to create the active correction.",
-    `Lock: ${
-      lockState.locked
-        ? `${directiveProgress.repsCompleted}/${directiveProgress.repsRequired} verified`
-        : "correction verified"
-    }.`,
-    `Fuel: ${fuelStatusLine(fuel?.score)}`,
-    `Pressure: ${mounted ? escalationLine(directiveProgress) : ""} ${mounted ? proofLine(directiveProgress) : ""}`.trim(),
-  ];
-
-  return (
-    <main className="min-h-[calc(100vh-72px)] overflow-hidden bg-[#020810] px-4 pb-8 pt-4 text-white">
-      <div className="pointer-events-none fixed inset-x-0 top-0 h-72 bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.16),transparent_50%)]" />
-      <div className="relative mx-auto max-w-6xl space-y-4">
-        <section className="rounded-[32px] border border-white/[0.08] bg-[radial-gradient(circle_at_20%_0%,rgba(244,63,94,0.24),transparent_30%),radial-gradient(circle_at_88%_12%,rgba(250,204,21,0.12),transparent_28%),linear-gradient(145deg,rgba(21,35,58,0.94),rgba(3,11,24,0.98)_55%,rgba(2,8,16,1))] p-5 shadow-[0_24px_90px_rgba(0,0,0,0.42)] backdrop-blur-xl md:p-7">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Badge tone="bad">
-                <StatusDot tone={primaryCorrection ? severityTone(primaryCorrection.severity) : "warn"} />
-                Now
-              </Badge>
-              <Badge tone={lockState.locked ? "locked" : "good"}>
-                {lockState.locked ? "Locked" : "Unlocked"}
-              </Badge>
-            </div>
-            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-white/42">
-              Dashboard
-            </div>
-          </div>
-
-          <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_360px]">
-            <div className="min-w-0">
-              <div className="text-xs font-semibold uppercase tracking-[0.28em] text-white/45">
-                Active correction
-              </div>
-              <h1 className="mt-3 max-w-4xl text-5xl font-bold leading-[0.98] tracking-tight text-white md:text-7xl">
-                {primaryCorrection?.title || "No correction locked"}
-              </h1>
-
-              <div className="mt-5 rounded-[26px] border border-rose-300/18 bg-rose-500/[0.07] p-4">
-                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-rose-100/75">
-                  <StatusDot tone="bad" />
-                  Stop command
-                </div>
-                <div className="mt-2 text-lg font-semibold leading-7 text-rose-50">
-                  {primaryCorrection
-                    ? correctionInterrupt
-                    : "Run Vision to create the correction Sensei can hold you to."}
-                </div>
-              </div>
-
-              <div className="mt-4 rounded-[26px] border border-emerald-300/18 bg-emerald-400/[0.07] p-4">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-100/75">
-                  Next action
-                </div>
-                <div className="mt-2 text-2xl font-bold leading-9 text-emerald-50">
-                  {primaryCorrection ? fixNextRep : nextAction}
-                </div>
-              </div>
-            </div>
-
-            <div className="grid content-start gap-3">
-              <MiniStat label="Proof progress" value={`${proofPercent}%`} />
-              <div className="rounded-[20px] border border-white/[0.07] bg-black/24 p-3">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/38">
-                    Unlock
-                  </div>
-                  <div className="text-xs font-semibold text-white">
-                    {directiveProgress.repsCompleted}/{directiveProgress.repsRequired}
-                  </div>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-white/[0.07]">
-                  <div
-                    className="h-full rounded-full bg-yellow-300 transition-all duration-500"
-                    style={{ width: `${proofPercent}%` }}
-                  />
-                </div>
-                <div className="mt-3">
-                  <RepDots
-                    completed={directiveProgress.repsCompleted}
-                    required={directiveProgress.repsRequired}
-                  />
-                </div>
-              </div>
-              <MiniStat
-                label="Fuel readiness"
-                value={
-                  fuel?.score !== undefined
-                    ? `${Math.round(fuel.score)} / 100`
-                    : "Missing"
-                }
-              />
-              <MiniStat label="Recovery state" value={recoveryLabel} />
-              <MiniStat
-                label="Pressure"
-                value={mounted ? escalationLine(directiveProgress) : ""}
-              />
-            </div>
-          </div>
-        </section>
-
-        <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
-          <div className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-2">
-              <AppCard
-                title="Locked progression"
-                sub="No proof, no unlock."
-                right={
-                  <Badge tone={lockState.locked ? "locked" : "good"}>
-                    {lockState.locked ? "Locked" : "Clear"}
-                  </Badge>
-                }
-                tone="locked"
-              >
-                <div className="space-y-4">
-                  <div className="text-2xl font-bold text-white">{nextAction}</div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <MiniStat
-                      label="Resistance"
-                      value={directiveProgress.underResistance ? "On" : "Off"}
-                    />
-                    <MiniStat
-                      label="Proof"
-                      value={
-                        directiveProgress.proofType === "none"
-                          ? "Missing"
-                          : directiveProgress.proofType
-                      }
-                    />
-                  </div>
-                  <div className="text-sm leading-7 text-white/55">
-                    {mounted
-                      ? `${escalationLine(directiveProgress)} ${proofLine(directiveProgress)}`
-                      : ""}
-                  </div>
-                </div>
-              </AppCard>
-
-              <AppCard
-                title="Vision correction"
-                sub={vision?.clipLabel || "Latest technical read."}
-                right={
-                  primaryCorrection ? (
-                    <Badge tone={severityTone(primaryCorrection.severity)}>
-                      {primaryCorrection.severity}
-                    </Badge>
-                  ) : (
-                    <Badge tone="warn">Needed</Badge>
-                  )
-                }
-                tone="danger"
-              >
-                <div className="space-y-4">
-                  <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/38">
-                      Why it matters
-                    </div>
-                    <div className="mt-2 text-sm leading-7 text-white/75">
-                      {whyItMatters}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/38">
-                      If ignored
-                    </div>
-                    <div className="mt-2 text-sm leading-7 text-white/75">
-                      {costIfIgnored}
-                    </div>
-                  </div>
-                  <ActionButton href="/sensei-vision" label="Open Vision" />
-                </div>
-              </AppCard>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <AppCard
-                title="Fuel readiness"
-                sub="Nutrition support for the current load."
-                right={
-                  fuel?.score !== undefined ? (
-                    <Badge tone={getFuelTone(fuel.score)}>
-                      {Math.round(fuel.score)}
-                    </Badge>
-                  ) : (
-                    <Badge tone="warn">Missing</Badge>
-                  )
-                }
-                tone="fuel"
-              >
-                <div className="space-y-4">
-                  <div className="text-lg font-semibold leading-7 text-white">
-                    {fuelStatusLine(fuel?.score)}
-                  </div>
-                  <div className="rounded-[20px] border border-white/[0.07] bg-black/24 p-4 text-sm leading-6 text-white/62">
-                    {fuelSnippet(fuel?.report)}
-                  </div>
-                  <ActionButton href="/fuel" label="Open Fuel" />
-                </div>
-              </AppCard>
-
-              <AppCard
-                title="Proof progress"
-                sub="The only progress that counts."
-                right={
-                  <Badge tone={latestProof ? "good" : "locked"}>
-                    {latestProof ? "Loaded" : "Needed"}
-                  </Badge>
-                }
-                tone="training"
-              >
-                <div className="space-y-4">
-                  <label className="flex w-full cursor-pointer items-center justify-center rounded-[22px] bg-emerald-300 px-5 py-4 text-center text-sm font-bold text-[#03120d] shadow-[0_14px_40px_rgba(52,211,153,0.16)] transition hover:bg-emerald-200 active:scale-[0.99]">
-                    Upload proof
-                    <input
-                      type="file"
-                      accept="image/*,video/*"
-                      onChange={(e) =>
-                        handleProofUpload(e.target.files?.[0] || null)
-                      }
-                      className="hidden"
-                    />
-                  </label>
-
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        updateDirectiveProgress((prev: DirectiveProgress) => ({
-                          ...prev,
-                          underResistance: !prev.underResistance,
-                        }))
-                      }
-                      className="rounded-[20px] border border-white/[0.07] bg-white/[0.045] px-4 py-3 text-sm text-white transition hover:border-white/18 active:scale-[0.99]"
-                    >
-                                            <span suppressHydrationWarning>
-                        Resistance: {directiveProgress.underResistance ? "On" : "Off"}
-                      </span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        updateDirectiveProgress((prev: DirectiveProgress) => ({
-                          ...prev,
-                          repeatedFailureCount: prev.repeatedFailureCount + 1,
-                        }))
-                      }
-                      className="rounded-[20px] border border-rose-400/14 bg-rose-500/[0.065] px-4 py-3 text-sm text-rose-100 transition hover:bg-rose-500/[0.10] active:scale-[0.99]"
-                                          >
-                      Mark failure
-                    </button>
-                  </div>
-
-                  {latestProof ? (
-                    <div className="rounded-[22px] border border-white/[0.07] bg-black/25 p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/38">
-                            Latest proof
-                          </div>
-                          <div className="mt-1 truncate text-xs text-white/50">
-                            {latestProof.fileName} ·{" "}
-                            {new Date(latestProof.uploadedAt).toLocaleTimeString()}
-                          </div>
-                        </div>
-                        <Badge
-                          tone={
-                            latestProof.mimeType.startsWith("video")
-                              ? "good"
-                              : "warn"
-                          }
-                        >
-                          {latestProof.mimeType.startsWith("video")
-                            ? "Video"
-                            : "Image"}
-                        </Badge>
-                      </div>
-
-                      <div className="mt-3 overflow-hidden rounded-[18px] border border-white/[0.07] bg-black/35">
-                        {latestProof.mimeType.startsWith("video") ? (
-                          <video
-                            src={latestProof.dataUrl}
-                            controls
-                            className="max-h-72 w-full object-contain"
-                          />
-                        ) : (
-                          <img
-                            src={latestProof.dataUrl}
-                            alt="Latest proof"
-                            className="max-h-72 w-full object-contain"
-                          />
-                        )}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </AppCard>
-            </div>
-
-            <AppCard
-              title="Command feed"
-              sub="What the system is asking from you now."
-              right={<Badge tone={pressureTone}>Pressure</Badge>}
-              tone="psych"
-            >
-              <div className="space-y-3">
-                {commandFeed.map((item, index) => (
-                  <div
-                    key={index}
-                    className="rounded-[22px] border border-white/[0.07] bg-black/24 p-4 text-sm leading-7 text-white/76"
-                  >
-                    {item}
-                  </div>
-                ))}
-              </div>
-            </AppCard>
-
-            <AppCard
-              title="Today"
-              sub={sessionMeta}
-              right={
-                camp?.dailySession ? (
-                  <Badge tone="good">{camp.dailySession.durationMin} min</Badge>
-                ) : (
-                  <Badge tone="warn">Build camp</Badge>
-                )
-              }
-              compact
-              tone="training"
-            >
-              <div className="space-y-4">
-                <div className="rounded-[22px] border border-emerald-400/14 bg-emerald-500/[0.055] p-4">
-                  <div className="text-base font-semibold text-white">
-                    {sessionTitle}
-                  </div>
-                </div>
-                <BulletList items={executionBlocks} compact />
-              </div>
-            </AppCard>
-          </div>
-
-          <aside className="space-y-4 lg:sticky lg:top-20 lg:self-start">
-            <AppCard
-              title="Weight"
-              sub="Fight readiness context."
-              right={<Badge tone={statusTone(weightStatus)}>{weightStatus}</Badge>}
-              compact
-              tone="fuel"
-            >
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-3">
-                  <MiniStat
-                    label="Class"
-                    value={weightClass}
-                  />
-                  <MiniStat
-                    label="Days"
-                    value={daysRemaining !== null ? `${daysRemaining}` : "-"}
-                  />
-                  <MiniStat
-                    label="Current"
-                    value={
-                      currentWeight !== null ? `${currentWeight} kg` : "Not logged"
-                    }
-                  />
-                  <MiniStat
-                    label="Target"
-                    value={
-                      typeof targetWeight === "number"
-                        ? `${targetWeight} kg`
-                        : "Not set"
-                    }
-                  />
-                </div>
-
-                <div>
-                  <div className="mb-2 flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.22em] text-white/38">
-                    <span>Trajectory</span>
-                    <span>
-                      {weightDifference !== null
-                        ? `${weightDifference.toFixed(1)} kg`
-                        : "-"}
-                    </span>
-                  </div>
-                  <div className="h-2 w-full overflow-hidden rounded-full border border-white/[0.07] bg-black/40">
-                    <div
-                      className={cn(
-                        "h-full rounded-full transition-all duration-500",
-                        weightStatus === "On Track"
-                          ? "bg-emerald-400/80"
-                          : weightStatus === "Slightly Behind"
-                          ? "bg-amber-400/80"
-                          : weightStatus === "Off Track"
-                          ? "bg-rose-400/80"
-                          : "bg-white/20"
-                      )}
-                      style={{ width: `${progressPct}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div className="flex gap-2">
-                  <input
-                    value={weightInput}
-                    onChange={(e) => setWeightInput(e.target.value)}
-                    placeholder="e.g. 68.2"
-                    className="w-full rounded-[18px] border border-white/[0.07] bg-black/30 px-4 py-3 text-sm text-white placeholder:text-white/35 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
-                  />
-                  <button
-                    onClick={handleLogWeight}
-                    className="rounded-[18px] bg-emerald-300 px-4 py-3 text-sm font-semibold text-[#041026] transition hover:bg-emerald-200 active:scale-[0.98]"
-                  >
-                    Log
-                  </button>
-                </div>
-              </div>
-            </AppCard>
-
-            <AppCard title="Success / banned" sub="Accountability rules." compact>
-              <div className="space-y-4">
-                <div>
-                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-100/65">
-                    Counts
-                  </div>
-                  <BulletList items={successToday} compact />
-                </div>
-                <div>
-                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-rose-100/65">
-                    Does not count
-                  </div>
-                  <BulletList items={bannedToday} tone="rose" compact />
-                </div>
-              </div>
-            </AppCard>
-          </aside>
-        </div>
-
-        <AppCard
-          title="System layer"
-          sub="Secondary issues, coach notes, and camp control."
-          right={
-            <button
-              type="button"
-              onClick={() => setShowSystems((v) => !v)}
-              className="rounded-full border border-white/[0.07] bg-white/[0.04] px-3 py-1 text-[11px] text-white/70 transition hover:border-white/18 hover:text-white active:scale-[0.98]"
-            >
-              {showSystems ? "Hide" : "Show"}
-            </button>
-          }
-          compact
+    setWeightLogs(nextLogs);
+    writeJson("disciplin_weight_logs", nextLogs);
+    setWeightInput("");
+  }
+    return (
+    <motion.main
+      variants={pageMotion}
+      initial="hidden"
+      animate="show"
+      className="min-h-[calc(100vh-72px)] bg-[#05080d] px-4 pb-32 pt-4 text-white"
+    >
+      <div className="mx-auto max-w-5xl space-y-4">
+        <motion.section
+          variants={sectionMotion}
+          className="overflow-hidden rounded-[28px] border border-white/[0.08] bg-[#0a1019] shadow-[0_24px_80px_rgba(0,0,0,0.36)]"
         >
-          {showSystems ? (
-            <div className="grid gap-4 md:grid-cols-2">
-              <AppCard title="Coach notes" sub="Carryover for today." compact>
-                {coachNotes.length ? (
-                  <BulletList items={coachNotes} compact />
-                ) : (
-                  <div className="text-sm text-white/55">
-                    No coach notes yet. Build a camp in Sensei first.
-                  </div>
-                )}
-              </AppCard>
-
-              <AppCard
-                title="Supporting issues"
-                sub="Real, but not primary."
-                right={
-                  secondaryCorrections.length ? (
-                    <button
-                      type="button"
-                      onClick={() => setShowSupporting((v) => !v)}
-                      className="rounded-full border border-white/[0.07] bg-white/[0.04] px-3 py-1 text-[11px] text-white/70 transition hover:border-white/18 hover:text-white"
-                    >
-                      {showSupporting
-                        ? "Hide"
-                        : `Show ${secondaryCorrections.length}`}
-                    </button>
-                  ) : (
-                    <Badge tone="neutral">None</Badge>
-                  )
-                }
-                compact
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] px-5 py-4 sm:px-6">
+            <div className="flex flex-wrap gap-2">
+              <StatusBadge
+                tone={toneForSeverity(primaryCorrection?.severity)}
+                pulse
               >
-                {secondaryCorrections.length ? (
-                  <div className="space-y-3">
-                    {showSupporting ? (
-                      <>
-                        {secondaryCorrections.map((item, i) => {
-                          const shortText =
-                            item.short_detail ||
-                            item.unstable ||
-                            item.break_point ||
-                            item.good ||
-                            "Secondary issue detected.";
+                Active correction
+              </StatusBadge>
 
-                          return (
-                            <div
-                              key={item.id ?? i}
-                              className="rounded-[20px] border border-white/[0.07] bg-black/25 p-4"
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                  <div className="text-sm font-semibold text-white">
-                                    {item.title}
-                                  </div>
-                                  <div className="mt-2 text-sm text-white/65">
-                                    {compactSentence(shortText, 120)}
-                                  </div>
-                                </div>
-                                <Badge tone={severityTone(item.severity)}>
-                                  {item.severity}
-                                </Badge>
-                              </div>
-                            </div>
-                          );
-                        })}
+              <StatusBadge
+                tone={lockState.locked ? "danger" : "training"}
+                pulse={lockState.locked}
+              >
+                {lockState.locked ? "Locked" : "Clear"}
+              </StatusBadge>
+            </div>
 
-                        <Link
-                          href="/sensei-vision"
-                          className="inline-flex text-xs text-emerald-300 hover:text-emerald-200"
-                        >
-                          Open full Vision report
-                        </Link>
-                      </>
-                    ) : (
-                      <div className="text-sm text-white/55">
-                        Secondary problems stay hidden until the main correction is
-                        understood.
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="text-sm text-white/55">
-                    No secondary issues loaded.
-                  </div>
-                )}
-              </AppCard>
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/34">
+              Before training
+            </p>
+          </div>
 
-              {camp?.control ? (
-                <AppCard
-                  title="Camp control"
-                  sub="Load, warnings, and next step."
-                  right={
-                    <Badge tone={badgeToneForLoad(camp.control.trainingLoad)}>
-                      {camp.control.trainingLoad}
-                    </Badge>
-                  }
-                  compact
-                >
-                  <div className="grid gap-4">
-                    <div className="grid grid-cols-3 gap-3">
-                      <MiniStat label="Load" value={camp.control.trainingLoad} />
-                      <MiniStat
-                        label="Warnings"
-                        value={String(camp.control.warnings.length)}
-                      />
-                      <MiniStat
-                        label="Next"
-                        value={String(camp.control.nextStep.length)}
-                      />
-                    </div>
+          <div className="grid gap-6 px-5 py-6 sm:px-6 lg:grid-cols-[minmax(0,1fr)_260px] lg:items-center">
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/38">
+                Fix this
+              </p>
 
-                    {camp.control.warnings.length ? (
-                      <div className="rounded-[20px] border border-white/[0.07] bg-black/25 p-4">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/38">
-                          Warnings
-                        </div>
-                        <div className="mt-3">
-                          <BulletList
-                            items={camp.control.warnings.slice(0, 2)}
-                            tone="amber"
-                            compact
-                          />
-                        </div>
-                      </div>
-                    ) : null}
+              <motion.h1
+                layout
+                className="mt-3 max-w-3xl text-3xl font-bold leading-[1.05] text-white sm:text-4xl"
+              >
+                {primaryCorrection?.title || "No correction locked"}
+              </motion.h1>
 
-                    {camp.control.nextStep.length ? (
-                      <div className="rounded-[20px] border border-white/[0.07] bg-black/25 p-4">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/38">
-                          Next step
-                        </div>
-                        <div className="mt-2 text-sm text-white/80">
-                          {lockState.locked
-                            ? lockState.userMessage
-                            : compactSentence(camp.control.nextStep[0], 120)}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </AppCard>
+              <p className="mt-4 max-w-2xl text-base font-semibold leading-7 text-white/64">
+                {primaryCorrection
+                  ? nextRep
+                  : "Run Vision before training."}
+              </p>
+            </div>
+
+            <div className="flex items-center justify-center gap-4 lg:justify-end">
+              <ProgressRing
+                value={directiveProgress.repsCompleted}
+                max={directiveProgress.repsRequired}
+                label={`${directiveProgress.repsCompleted}/${directiveProgress.repsRequired}`}
+                caption="Clean reps"
+                tone="training"
+                size={112}
+              />
+
+              <ProgressRing
+                value={
+                  typeof fuel?.score === "number"
+                    ? fuel.score
+                    : 0
+                }
+                max={100}
+                label={
+                  typeof fuel?.score === "number"
+                    ? `${Math.round(fuel.score)}`
+                    : "--"
+                }
+                caption="Readiness"
+                tone={toneForFuel(fuel?.score)}
+                size={112}
+              />
+            </div>
+          </div>
+
+          <div className="grid border-t border-white/[0.06] sm:grid-cols-2">
+            <div className="border-b border-white/[0.06] px-5 py-4 sm:border-b-0 sm:border-r sm:px-6">
+              <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-rose-200/52">
+                Stop
+              </p>
+
+              <p className="mt-2 text-sm font-semibold leading-6 text-white">
+                {primaryCorrection
+                  ? stopCommand
+                  : "Do not train blind."}
+              </p>
+            </div>
+
+            <div className="px-5 py-4 sm:px-6">
+              <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-emerald-200/52">
+                Next
+              </p>
+
+              <p className="mt-2 text-sm font-semibold leading-6 text-white">
+                {nextAction}
+              </p>
+            </div>
+          </div>
+
+          <div className="border-t border-white/[0.06] p-3">
+            <ActionLink
+              href={
+                !primaryCorrection
+                  ? "/sensei-vision"
+                  : lockState.locked
+                    ? "/sensei"
+                    : "/dashboard"
+              }
+              strong
+            >
+              {!primaryCorrection
+                ? "Run Vision"
+                : lockState.locked
+                  ? "Continue correction"
+                  : "Start session"}
+            </ActionLink>
+          </div>
+        </motion.section>
+
+        <motion.div
+          variants={sectionMotion}
+          className="-mx-4 overflow-x-auto px-4 pb-1"
+        >
+          <div className="flex snap-x snap-mandatory gap-3">
+            <ModuleTile
+              href="/fuel"
+              label="Fuel"
+              value={
+                typeof fuel?.score === "number"
+                  ? `${Math.round(fuel.score)} readiness`
+                  : "Not logged"
+              }
+              command={fuelDecision(fuel?.score)}
+              tone="fuel"
+            />
+
+            <ModuleTile
+              href="/sensei-vision"
+              label="Vision"
+              value={
+                primaryCorrection?.severity || "Clip needed"
+              }
+              command={
+                primaryCorrection
+                  ? short(nextRep, 80)
+                  : "Upload a frame."
+              }
+              tone="vision"
+            />
+
+            <ModuleTile
+              href="/sensei"
+              label="Sensei"
+              value={
+                lockState.locked ? "Correction locked" : "Clear"
+              }
+              command={
+                lockState.locked
+                  ? nextAction
+                  : "Open the next correction."
+              }
+              tone={
+                lockState.locked ? "danger" : "training"
+              }
+            />
+
+            <ModuleTile
+              href="/dashboard"
+              label="Proof"
+              value={`${proofPercent}% complete`}
+              command={proofDecision(directiveProgress)}
+              tone="training"
+            />
+          </div>
+        </motion.div>
+
+        <Panel
+          title="Today"
+          label="One correction. One session."
+          tone="training"
+          right={
+            camp?.dailySession ? (
+              <StatusBadge tone="training">
+                {camp.dailySession.durationMin} min
+              </StatusBadge>
+            ) : (
+              <StatusBadge tone="neutral">
+                Build camp
+              </StatusBadge>
+            )
+          }
+        >
+          <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_220px] md:items-end">
+            <div>
+              <p className="text-2xl font-bold text-white">
+                {sessionTitle}
+              </p>
+
+              {camp?.dailySession?.goal ? (
+                <p className="mt-2 text-sm leading-6 text-white/48">
+                  {short(camp.dailySession.goal, 140)}
+                </p>
               ) : null}
 
-              <AppCard
-                title="Mission state"
-                sub="Fight and directive context."
-                right={<Badge tone={statusTone(weightStatus)}>{weightStatus}</Badge>}
-                compact
-              >
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <MiniStat
-                    label="Directive"
-                    value={compactSentence(
-                      primaryCorrection?.title ||
-                        camp?.directive?.title ||
-                        "No primary correction yet",
-                      40
-                    )}
-                  />
-                  <MiniStat
-                    label="Days"
-                    value={daysRemaining !== null ? `${daysRemaining}` : "-"}
-                  />
-                  <MiniStat
-                    label="Fight"
-                    value={fightDate ?? "No fight scheduled"}
-                  />
-                  <MiniStat
-                    label="Weight"
-                    value={
-                      currentWeight !== null ? `${currentWeight} kg` : "Not logged"
-                    }
-                  />
-                </div>
-              </AppCard>
+              <div className="mt-5">
+                <CommandList
+                  items={sessionBlocks}
+                  tone="training"
+                />
+              </div>
             </div>
-          ) : (
-            <div className="text-sm text-white/55">
-              System layer is quiet until needed. The current job is still the active correction.
-            </div>
-          )}
-        </AppCard>
 
+            <div className="space-y-3">
+              <ActionLink href="/sensei" strong>
+                Start with Sensei
+              </ActionLink>
+
+              <ActionLink href="/sensei-vision">
+                Retest with Vision
+              </ActionLink>
+            </div>
+          </div>
+
+          {camp?.control?.warnings?.length ? (
+            <div className="mt-5 border-t border-white/[0.06] pt-4">
+              <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-amber-200/52">
+                Watch
+              </p>
+
+              <p className="mt-2 text-sm font-semibold leading-6 text-white/72">
+                {short(camp.control.warnings[0], 150)}
+              </p>
+            </div>
+          ) : null}
+        </Panel>
+                <div className="grid gap-4 md:grid-cols-2">
+          <Panel
+            title="Proof"
+            label="What counts"
+            tone="training"
+            right={
+              <StatusBadge
+                tone={latestProof ? "training" : "neutral"}
+                pulse={!latestProof}
+              >
+                {latestProof ? "Loaded" : "Needed"}
+              </StatusBadge>
+            }
+          >
+            <div className="space-y-4">
+              <div className="flex items-center gap-5">
+                <ProgressRing
+                  value={directiveProgress.repsCompleted}
+                  max={directiveProgress.repsRequired}
+                  label={`${proofPercent}%`}
+                  caption="Complete"
+                  tone="training"
+                  size={108}
+                />
+
+                <div className="min-w-0 flex-1">
+                  <p className="text-xl font-bold text-white">
+                    {directiveProgress.repsCompleted}/
+                    {directiveProgress.repsRequired} clean reps
+                  </p>
+
+                  <p className="mt-2 text-sm leading-6 text-white/48">
+                    {mounted
+                      ? proofDecision(directiveProgress)
+                      : "Proof missing."}
+                  </p>
+
+                  <p className="mt-1 text-sm leading-6 text-white/48">
+                    Resistance:{" "}
+                    {directiveProgress.underResistance
+                      ? "On"
+                      : "Off"}
+                  </p>
+                </div>
+              </div>
+
+              {latestProof ? (
+                <div className="overflow-hidden rounded-[20px] border border-white/[0.07] bg-black/30">
+                  <div className="flex items-center justify-between gap-3 px-4 py-3">
+                    <div className="min-w-0">
+                      <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/34">
+                        Latest proof
+                      </p>
+
+                      <p className="mt-1 truncate text-sm font-semibold text-white">
+                        {latestProof.fileName}
+                      </p>
+                    </div>
+
+                    <StatusBadge tone="training">
+                      {latestProof.mimeType.startsWith("video")
+                        ? "Video"
+                        : "Image"}
+                    </StatusBadge>
+                  </div>
+
+                  {latestProof.mimeType.startsWith("video") ? (
+                    <video
+                      src={latestProof.dataUrl}
+                      controls
+                      className="max-h-64 w-full object-contain"
+                    />
+                  ) : (
+                    <img
+                      src={latestProof.dataUrl}
+                      alt="Latest proof"
+                      className="max-h-64 w-full object-contain"
+                    />
+                  )}
+                </div>
+              ) : null}
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <motion.label
+                  whileTap={{ scale: 0.98 }}
+                  className="flex min-h-12 cursor-pointer items-center justify-center rounded-full bg-emerald-300 px-5 py-3 text-sm font-bold text-[#03120d] transition hover:bg-emerald-200"
+                >
+                  Submit proof
+
+                  <input
+                    type="file"
+                    accept="image/*,video/*"
+                    onChange={(event) =>
+                      handleProofUpload(
+                        event.target.files?.[0] || null
+                      )
+                    }
+                    className="hidden"
+                  />
+                </motion.label>
+
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() =>
+                    updateProgress((previous) => ({
+                      ...previous,
+                      underResistance:
+                        !previous.underResistance,
+                    }))
+                  }
+                  className={cn(
+                    "min-h-12 rounded-full border px-5 py-3 text-sm font-bold transition",
+                    directiveProgress.underResistance
+                      ? "border-emerald-300/24 bg-emerald-300/[0.08] text-emerald-100"
+                      : "border-white/[0.10] bg-white/[0.045] text-white"
+                  )}
+                >
+                  Resistance:{" "}
+                  {directiveProgress.underResistance
+                    ? "On"
+                    : "Off"}
+                </motion.button>
+              </div>
+            </div>
+          </Panel>
+
+          <Panel
+            title="Readiness"
+            label="How hard you can train"
+            tone="fuel"
+            right={
+              <StatusBadge tone={toneForFuel(fuel?.score)}>
+                {typeof fuel?.score === "number"
+                  ? Math.round(fuel.score)
+                  : "Needed"}
+              </StatusBadge>
+            }
+          >
+            <div className="space-y-4">
+              <div className="flex items-center gap-5">
+                <ProgressRing
+                  value={
+                    typeof fuel?.score === "number"
+                      ? fuel.score
+                      : 0
+                  }
+                  max={100}
+                  label={
+                    typeof fuel?.score === "number"
+                      ? `${Math.round(fuel.score)}`
+                      : "--"
+                  }
+                  caption="Readiness"
+                  tone={toneForFuel(fuel?.score)}
+                  size={108}
+                />
+
+                <div className="min-w-0">
+                  <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/34">
+                    Decision
+                  </p>
+
+                  <p className="mt-2 text-xl font-bold leading-7 text-white">
+                    {fuelDecision(fuel?.score)}
+                  </p>
+                </div>
+              </div>
+
+              <ActionLink href="/fuel">
+                Open Fuel
+              </ActionLink>
+            </div>
+          </Panel>
+
+          <Panel
+            title="Vision"
+            label="Latest technical test"
+            tone="vision"
+            right={
+              <StatusBadge
+                tone={toneForSeverity(
+                  primaryCorrection?.severity
+                )}
+              >
+                {primaryCorrection?.severity || "Needed"}
+              </StatusBadge>
+            }
+          >
+            <div className="divide-y divide-white/[0.06]">
+              <SignalRow
+                label="What failed"
+                value={
+                  primaryCorrection?.title || "No clip loaded"
+                }
+                tone="danger"
+              />
+
+              <SignalRow
+                label="Next rep"
+                value={
+                  primaryCorrection
+                    ? short(nextRep, 85)
+                    : "Upload a clip."
+                }
+                tone="vision"
+              />
+
+              <SignalRow
+                label="Better opponent"
+                value={
+                  primaryCorrection?.if_ignored
+                    ? short(
+                        primaryCorrection.if_ignored,
+                        85
+                      )
+                    : "Not tested."
+                }
+                tone="neutral"
+              />
+            </div>
+
+            <div className="mt-4">
+              <ActionLink href="/sensei-vision">
+                Open Vision
+              </ActionLink>
+            </div>
+          </Panel>
+
+          <Panel
+            title="Weight"
+            label="Fight context"
+            tone="neutral"
+            right={
+              <StatusBadge tone={toneForWeight(weightStatus)}>
+                {weightStatus}
+              </StatusBadge>
+            }
+          >
+            <div className="divide-y divide-white/[0.06]">
+              <SignalRow
+                label="Current"
+                value={
+                  currentWeight === null
+                    ? "Not logged"
+                    : `${currentWeight} kg`
+                }
+                tone="neutral"
+              />
+
+              <SignalRow
+                label="Target"
+                value={
+                  targetWeight === null
+                    ? "Not set"
+                    : `${targetWeight} kg`
+                }
+                tone="training"
+              />
+
+              <SignalRow
+                label="Fight"
+                value={
+                  daysRemaining === null
+                    ? "No date"
+                    : `${daysRemaining} days`
+                }
+                tone="neutral"
+              />
+            </div>
+
+            <div className="mt-4 flex gap-2">
+              <input
+                value={weightInput}
+                onChange={(event) =>
+                  setWeightInput(event.target.value)
+                }
+                inputMode="decimal"
+                placeholder="e.g. 68.2"
+                className="min-w-0 flex-1 rounded-full border border-white/[0.10] bg-black/30 px-4 py-3 text-sm text-white outline-none placeholder:text-white/28 focus:border-emerald-300/34"
+              />
+
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.96 }}
+                onClick={handleLogWeight}
+                className="rounded-full bg-white px-5 py-3 text-sm font-bold text-black transition hover:bg-white/88"
+              >
+                Log
+              </motion.button>
+            </div>
+          </Panel>
+        </div>
+
+        <Panel
+          title="Pressure"
+          label="Keep emotion out of the action"
+          tone="pressure"
+          right={
+            <StatusBadge tone="pressure">
+              Separate
+            </StatusBadge>
+          }
+        >
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_220px] md:items-end">
+            <div className="divide-y divide-white/[0.06]">
+              <SignalRow
+                label="Current state"
+                value={pressureDecision(directiveProgress)}
+                tone="pressure"
+              />
+
+              <SignalRow
+                label="Technical proof"
+                value={
+                  mounted
+                    ? proofDecision(directiveProgress)
+                    : "Proof missing."
+                }
+                tone="training"
+              />
+
+              <SignalRow
+                label="Rule"
+                value="Emotion does not change the action."
+                tone="pressure"
+              />
+            </div>
+
+            <ActionLink href="/sensei">
+              Ask Sensei
+            </ActionLink>
+          </div>
+        </Panel>
+
+        <Panel
+          title="What matters now"
+          label="Recent decisions"
+          tone="neutral"
+        >
+          <CommandList
+            items={commandFeed}
+            tone="training"
+          />
+        </Panel>
+
+        {secondaryCorrections.length ? (
+          <Panel
+            title="Other mistakes"
+            label="Do not chase these first"
+            tone="neutral"
+            right={
+              <StatusBadge tone="neutral">
+                {secondaryCorrections.length}
+              </StatusBadge>
+            }
+          >
+            <CommandList
+              items={secondaryCorrections.map(
+                (item) => item.title
+              )}
+              tone="vision"
+            />
+          </Panel>
+        ) : null}
       </div>
-    </main>
+    </motion.main>
   );
 }

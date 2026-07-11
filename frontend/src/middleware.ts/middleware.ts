@@ -1,34 +1,59 @@
-import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 
-// paths that REQUIRES membership
-const protectedRoutes = ["/fuel", "/sensei", "/gyms"];
+const isProd = process.env.NODE_ENV === "production";
 
-export function middleware(req: NextRequest) {
-  const url = req.nextUrl;
-  const pathname = url.pathname;
+function buildSecurityHeaders() {
+  const headers = new Headers();
 
-  const mockUser = {
-    trialActive: true,
-    trialEnds: new Date(Date.now() + 86400000), // 1 day left
-    membership: "none",
-  };
+  headers.set("X-DNS-Prefetch-Control", "on");
+  headers.set("X-Frame-Options", "DENY");
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  headers.set("X-Permitted-Cross-Domain-Policies", "none");
 
-  const trialExpired =
-    mockUser.trialActive && mockUser.trialEnds.getTime() < Date.now();
+  headers.set(
+    "Permissions-Policy",
+    [
+      "camera=(self)",
+      "microphone=()",
+      "geolocation=()",
+      "payment=()",
+      "usb=()",
+      "bluetooth=()",
+      "serial=()",
+      "accelerometer=()",
+      "gyroscope=()",
+      "magnetometer=()",
+    ].join(", ")
+  );
 
-  const needsPaywall = protectedRoutes.some((p) => pathname.startsWith(p));
+  headers.set("Cross-Origin-Opener-Policy", "same-origin");
+  headers.set("Cross-Origin-Resource-Policy", "same-origin");
 
-  if (needsPaywall) {
-    if (!mockUser.trialActive || trialExpired) {
-      url.pathname = "/membership";
-      return NextResponse.redirect(url);
-    }
+  if (isProd) {
+    headers.set(
+      "Strict-Transport-Security",
+      "max-age=63072000; includeSubDomains; preload"
+    );
   }
 
-  return NextResponse.next();
+  return headers;
+}
+
+export function middleware(request: NextRequest) {
+  const response = NextResponse.next();
+  const securityHeaders = buildSecurityHeaders();
+
+  securityHeaders.forEach((value, key) => {
+    response.headers.set(key, value);
+  });
+
+  return response;
 }
 
 export const config = {
-  matcher: ["/fuel/:path*", "/sensei/:path*", "/gyms/:path*"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml).*)",
+  ],
 };

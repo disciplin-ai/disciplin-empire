@@ -1,80 +1,106 @@
 import Link from "next/link";
 
-function cn(...classes: Array<string | false | null | undefined>) {
-  return classes.filter(Boolean).join(" ");
-}
+const navItems = [
+  { href: "/sensei-vision", label: "Vision", symbol: "⌖" },
+  { href: "/sensei", label: "Sensei", symbol: "⌘" },
+  { href: "/dashboard", label: "Dashboard", symbol: "◎" },
+  { href: "/fuel", label: "Fuel", symbol: "ϟ" },
+  { href: "/legal/safety", label: "Safety/Data", symbol: "◇" },
+];
 
-function StatusPill({
-  children,
-  tone = "neutral",
-}: {
-  children: React.ReactNode;
-  tone?: "neutral" | "danger" | "amber" | "cyan" | "emerald";
-}) {
-  const cls =
-    tone === "danger"
-      ? "border-rose-400/24 bg-rose-500/10 text-rose-100"
-      : tone === "amber"
-        ? "border-amber-300/24 bg-amber-400/10 text-amber-100"
-        : tone === "cyan"
-          ? "border-cyan-300/24 bg-cyan-400/10 text-cyan-100"
-          : tone === "emerald"
-            ? "border-emerald-300/24 bg-emerald-400/10 text-emerald-100"
-            : "border-white/10 bg-white/[0.045] text-white/58";
-
+function TopBar() {
   return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em]",
-        cls
-      )}
-    >
-      {children}
-    </span>
+    <header className="fixed inset-x-0 top-0 z-50 border-b border-white/10 bg-[#020817]/90 backdrop-blur-2xl">
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <Link
+            href="/dashboard"
+            className="text-[13px] font-bold tracking-[0.38em] text-emerald-300"
+          >
+            DISCIPLIN
+          </Link>
+          <div className="h-5 w-px bg-white/12" />
+          <span className="truncate text-sm font-medium text-white/70">
+            Safety/Data
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Link
+            href="/dashboard"
+            className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-bold text-white/82 transition hover:bg-white/[0.08]"
+          >
+            Dashboard
+          </Link>
+          <Link
+            href="/profile"
+            className="hidden rounded-full border border-emerald-300/25 bg-emerald-300/10 px-4 py-2 text-xs font-bold text-white sm:block"
+          >
+            Fighter file
+          </Link>
+        </div>
+      </div>
+    </header>
   );
 }
 
-function Dot({ tone }: { tone: "danger" | "amber" | "cyan" | "emerald" }) {
-  const cls =
-    tone === "danger"
-      ? "bg-rose-300"
-      : tone === "amber"
-        ? "bg-amber-300"
-        : tone === "cyan"
-          ? "bg-cyan-200"
-          : "bg-emerald-300";
+function BottomNav() {
+  return (
+    <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-[#020817]/92 px-3 pb-[max(env(safe-area-inset-bottom),10px)] pt-3 backdrop-blur-2xl">
+      <div className="mx-auto grid max-w-3xl grid-cols-5 rounded-[28px] border border-white/10 bg-white/[0.06] p-1 shadow-[0_20px_70px_rgba(0,0,0,0.45)]">
+        {navItems.map((item) => {
+          const active = item.href === "/legal/safety";
 
-  return <span className={cn("h-2 w-2 rounded-full", cls)} />;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={[
+                "flex min-w-0 flex-col items-center justify-center gap-1 rounded-[22px] px-2 py-2 text-center transition active:scale-[0.96]",
+                active ? "bg-white text-[#06101f]" : "text-white/55 hover:text-white",
+              ].join(" ")}
+            >
+              <span className="text-[17px] font-bold leading-none">
+                {item.symbol}
+              </span>
+              <span className="truncate text-[10px] font-bold leading-none">
+                {item.label}
+              </span>
+            </Link>
+          );
+        })}
+      </div>
+    </nav>
+  );
 }
 
-function Group({
+function Section({
+  dot,
+  label,
   title,
-  caption,
-  tone = "emerald",
   children,
 }: {
+  dot: string;
+  label: string;
   title: string;
-  caption?: string;
-  tone?: "danger" | "amber" | "cyan" | "emerald";
   children: React.ReactNode;
 }) {
   return (
-    <section className="space-y-2">
-      <div className="flex items-center justify-between gap-3 px-1">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Dot tone={tone} />
-            <h2 className="text-[13px] font-bold uppercase tracking-[0.18em] text-white/58">
-              {title}
-            </h2>
-          </div>
-          {caption ? (
-            <p className="mt-1 text-xs leading-5 text-white/38">{caption}</p>
-          ) : null}
-        </div>
+    <section className="space-y-3">
+      <div className="flex items-center gap-2">
+        <span className={`h-2 w-2 rounded-full ${dot}`} />
+        <p className="text-[11px] font-bold uppercase tracking-[0.28em] text-white/70">
+          {label}
+        </p>
       </div>
-      <div className="overflow-hidden rounded-[24px] border border-white/[0.08] bg-white/[0.055] shadow-[0_16px_50px_rgba(0,0,0,0.26)] backdrop-blur-xl">
-        {children}
+
+      <div className="overflow-hidden rounded-[28px] border border-white/10 bg-white/[0.055] shadow-[0_24px_80px_rgba(0,0,0,0.25)]">
+        <div className="border-b border-white/10 p-5">
+          <h2 className="text-xl font-bold tracking-[-0.02em] text-white">
+            {title}
+          </h2>
+        </div>
+        <div className="divide-y divide-white/10">{children}</div>
       </div>
     </section>
   );
@@ -83,182 +109,121 @@ function Group({
 function Row({
   title,
   body,
-  tone = "neutral",
-  strong = false,
 }: {
   title: string;
   body?: string;
-  tone?: "neutral" | "danger" | "amber" | "cyan" | "emerald";
-  strong?: boolean;
 }) {
-  const titleTone =
-    tone === "danger"
-      ? "text-rose-50"
-      : tone === "amber"
-        ? "text-amber-50"
-        : tone === "cyan"
-          ? "text-cyan-50"
-          : tone === "emerald"
-            ? "text-emerald-50"
-            : "text-white";
-
   return (
-    <div className="border-b border-white/[0.06] px-4 py-3.5 last:border-b-0">
-      <div className="flex items-start gap-3">
-        {tone !== "neutral" ? (
-          <span className="mt-1.5">
-            <Dot tone={tone} />
-          </span>
-        ) : null}
-        <div className="min-w-0 flex-1">
-          <div
-            className={cn(
-              "text-sm leading-6",
-              strong ? "font-bold" : "font-semibold",
-              titleTone
-            )}
-          >
-            {title}
-          </div>
-          {body ? (
-            <p className="mt-1 text-[13px] leading-6 text-white/52">{body}</p>
-          ) : null}
-        </div>
-      </div>
+    <div className="p-5">
+      <p className="text-sm font-bold text-white">{title}</p>
+      {body && <p className="mt-2 text-sm leading-6 text-white/65">{body}</p>}
     </div>
-  );
-}
-
-function ActionLink({
-  href,
-  label,
-  tone = "neutral",
-}: {
-  href: string;
-  label: string;
-  tone?: "neutral" | "danger" | "cyan" | "emerald";
-}) {
-  const cls =
-    tone === "danger"
-      ? "text-rose-100"
-      : tone === "cyan"
-        ? "text-cyan-100"
-        : tone === "emerald"
-          ? "text-emerald-100"
-          : "text-white/76";
-
-  return (
-    <Link
-      href={href}
-      className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-4 py-3.5 last:border-b-0 active:bg-white/[0.04]"
-    >
-      <span className={cn("text-sm font-semibold", cls)}>{label}</span>
-      <span className="text-lg leading-none text-white/28">›</span>
-    </Link>
   );
 }
 
 export default function SafetyPage() {
   return (
-    <main className="min-h-screen bg-[#020810] px-4 pb-28 pt-5 text-white sm:px-6">
-      <div className="pointer-events-none fixed inset-x-0 top-0 h-56 bg-[radial-gradient(circle_at_top,rgba(244,63,94,0.14),transparent_54%)]" />
+    <main className="min-h-screen bg-[#020810] pb-32 pt-24 text-white">
+      <TopBar />
 
-      <div className="relative mx-auto max-w-3xl space-y-5">
-        <header className="rounded-[30px] border border-white/[0.08] bg-white/[0.055] p-5 shadow-[0_18px_70px_rgba(0,0,0,0.32)] backdrop-blur-xl">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex flex-wrap gap-2">
-              <StatusPill tone="danger">Safety</StatusPill>
-              <StatusPill tone="amber">No medical advice</StatusPill>
-            </div>
-            <StatusPill tone="cyan">Supervision</StatusPill>
+      <div className="mx-auto max-w-3xl space-y-6 px-5">
+        <section className="rounded-[34px] border border-rose-300/20 bg-[radial-gradient(circle_at_top_left,rgba(244,63,94,0.22),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025))] p-6 shadow-[0_30px_90px_rgba(0,0,0,0.35)] sm:p-8">
+          <div className="flex flex-wrap gap-2">
+            <span className="rounded-full border border-rose-300/25 bg-rose-300/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-rose-100">
+              Safety layer
+            </span>
+            <span className="rounded-full border border-amber-300/25 bg-amber-300/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-amber-100">
+              No medical advice
+            </span>
           </div>
 
-          <div className="mt-6">
-            <p className="text-[11px] font-bold uppercase tracking-[0.28em] text-rose-200/65">
-              Disciplin Safety
-            </p>
-            <h1 className="mt-2 text-[38px] font-bold leading-none tracking-[-0.035em] text-white sm:text-5xl">
-              Training Safety
-            </h1>
-            <p className="mt-4 max-w-2xl text-[14px] leading-7 text-white/56">
-              Combat sports involve risk. Train responsibly and under qualified
-              supervision.
-            </p>
-          </div>
-        </header>
+          <p className="mt-8 text-[11px] font-bold uppercase tracking-[0.34em] text-rose-200/80">
+            Disciplin Safety
+          </p>
 
-        <Group
-          title="Stop Immediately"
-          caption="Do not continue training through serious symptoms."
-          tone="danger"
+          <h1 className="mt-4 text-5xl font-black tracking-[-0.06em] text-white sm:text-6xl">
+            Training Safety
+          </h1>
+
+          <p className="mt-5 max-w-2xl text-sm font-semibold leading-7 text-white/78">
+            Combat sports involve risk. Stop when serious symptoms appear. Use
+            qualified coaches, medical professionals, and adult supervision
+            where required.
+          </p>
+        </section>
+
+        <Section
+          dot="bg-rose-300"
+          label="Stop immediately"
+          title="Stop training immediately if you experience:"
         >
-          <Row title="Dizziness or confusion" tone="danger" strong />
-          <Row title="Concussion symptoms" tone="danger" strong />
-          <Row title="Chest pain" tone="danger" strong />
-          <Row title="Difficulty breathing" tone="danger" strong />
-          <Row title="Sudden sharp pain" tone="danger" strong />
-          <Row title="Numbness or instability" tone="danger" strong />
-        </Group>
+          <Row title="Dizziness or confusion" />
+          <Row title="Concussion symptoms" />
+          <Row title="Chest pain" />
+          <Row title="Difficulty breathing" />
+          <Row title="Sudden sharp pain" />
+          <Row title="Numbness or instability" />
+        </Section>
 
-        <Group
-          title="Weight Cutting Warning"
-          caption="Rapid dehydration and extreme cutting can be dangerous."
-          tone="amber"
+        <Section
+          dot="bg-amber-300"
+          label="Weight cutting warning"
+          title="Rapid dehydration can be life-threatening."
         >
           <Row
-            title="Extreme cuts can be life-threatening."
+            title="Extreme cuts can be dangerous."
             body="Rapid dehydration and extreme weight cutting can be dangerous and life-threatening."
-            tone="amber"
-            strong
           />
           <Row
             title="Use qualified professionals."
             body="Consult qualified professionals before attempting weight cuts."
-            tone="amber"
           />
-        </Group>
+        </Section>
 
-        <Group
-          title="Youth Athletes"
-          caption="AI guidance does not replace adult supervision."
-          tone="cyan"
+        <Section
+          dot="bg-cyan-200"
+          label="Youth athletes"
+          title="Minors require qualified adult supervision."
         >
           <Row
-            title="Minors require qualified adult supervision."
+            title="AI guidance does not replace adult supervision."
             body="Teenagers and younger athletes should train under qualified adult supervision and should not rely solely on AI-generated recommendations."
-            tone="cyan"
-            strong
           />
-        </Group>
+        </Section>
 
-        <Group
-          title="Emergency Situations"
-          caption="Disciplin is not an emergency service."
-          tone="danger"
+        <Section
+          dot="bg-rose-300"
+          label="Emergency situations"
+          title="Disciplin is not an emergency service."
         >
           <Row
             title="Seek immediate medical assistance."
             body="Seek immediate medical assistance during emergencies or serious injuries."
-            tone="danger"
-            strong
           />
           <Row
             title="No diagnosis or clearance."
             body="Disciplin does not provide emergency response, injury diagnosis, concussion clearance, rehabilitation protocols, or medical advice."
-            tone="danger"
           />
-        </Group>
+        </Section>
 
-        <Group
-          title="Data / Privacy Controls"
-          caption="Consent and safety controls attached to the operating system."
-          tone="emerald"
+        <Section
+          dot="bg-emerald-300"
+          label="Data / privacy controls"
+          title="Safety and data controls"
         >
-          <ActionLink href="/legal/data" label="Data controls" tone="emerald" />
-          <ActionLink href="/legal/privacy" label="Privacy policy" tone="cyan" />
-          <ActionLink href="/legal/terms" label="Terms" />
-        </Group>
+          <Link href="/legal/data" className="block p-5 text-sm font-bold text-emerald-100">
+            Data controls
+          </Link>
+          <Link href="/legal/privacy" className="block p-5 text-sm font-bold text-emerald-100">
+            Privacy policy
+          </Link>
+          <Link href="/legal/terms" className="block p-5 text-sm font-bold text-emerald-100">
+            Terms
+          </Link>
+        </Section>
       </div>
+
+      <BottomNav />
     </main>
   );
 }
