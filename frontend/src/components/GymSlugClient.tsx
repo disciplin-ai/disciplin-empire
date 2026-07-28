@@ -5,28 +5,46 @@ import Link from "next/link";
 import { useProfile } from "@/components/ProfileProvider";
 import { readUserJson, writeUserJson } from "@/lib/userScopedStorage";
 
-type Disc = "MMA" | "Wrestling" | "Boxing" | "Sambo" | "BJJ" | "Fitness";
 type Gym = {
+  id: string;
   slug: string;
   name: string;
   city: string;
   country: string;
-  address?: string;
-  verified?: boolean;
-  discipline: Disc;
-  level?: string;
-  price?: "$" | "$$" | "$$$" | "premium";
-  intensity?: "Easy" | "Moderate" | "Hard";
-  tags?: string[];
-  maps?: string;
-  website?: string;
+  address?: string | null;
+  is_verified?: boolean;
+  primary_discipline?: string | null;
+  disciplines?: string[];
+  style_tags?: string[];
+  level_label?: string | null;
+  price_label?: string | null;
+  intensity_label?: string | null;
+  google_maps_url?: string | null;
+  website?: string | null;
+  coach_notes?: string | null;
+};
 
-  // detail
-  about?: string;
-  highlights?: string[];
-  classes?: Array<{ name: string; days: string; time: string; intensity: string }>;
-  coaches?: Array<{ name: string; specialty: string; note?: string }>;
-  reviews?: Array<{ user: string; rating: number; text: string; date: string }>;
+type GymCoach = {
+  id: string;
+  name: string;
+  role?: string | null;
+  specialties?: string[];
+  credentials?: string | null;
+  profile_url?: string | null;
+};
+
+type GymProgram = {
+  id: string;
+  program_type: string;
+  level_label?: string | null;
+  frequency_per_week?: number | null;
+  notes?: string | null;
+};
+
+type GymRating = {
+  rating_avg: number | null;
+  rating_count: number | null;
+  source: string | null;
 };
 
 function cn(...classes: Array<string | false | null | undefined>) {
@@ -61,133 +79,102 @@ function Stars({ value }: { value: number }) {
   );
 }
 
-/**
- * Replace this with a real fetch later.
- * For now it's a local dataset so your UI works immediately.
- */
-const SAMPLE_GYMS: Gym[] = [
-  {
-    slug: "ufc-gym-jbr",
-    name: "UFC Gym JBR",
-    city: "Dubai",
-    country: "UAE",
-    address: "Jumeirah Beach Residence, Dubai",
-    verified: true,
-    discipline: "MMA",
-    level: "All levels",
-    price: "$$",
-    intensity: "Moderate",
-    tags: ["franchise", "fitness", "classes"],
-    maps: "https://maps.google.com",
-    website: "https://www.ufcgym.com",
-    about:
-      "Large facility with structured classes and consistent programming. Good for fighters who want predictable schedules and conditioning options.",
-    highlights: [
-      "Daily class schedule (multiple disciplines)",
-      "Strength & conditioning area",
-      "Beginner-friendly onboarding",
-      "Consistent coaching structure",
-    ],
-    classes: [
-      { name: "MMA Fundamentals", days: "Mon/Wed/Fri", time: "6:00pm", intensity: "Standard" },
-      { name: "Wrestling", days: "Tue/Thu", time: "7:00pm", intensity: "High pace" },
-      { name: "S&C Circuit", days: "Sat", time: "11:00am", intensity: "Hard" },
-    ],
-    coaches: [
-      { name: "Coach A", specialty: "Striking + MMA", note: "Clean fundamentals, high output." },
-      { name: "Coach B", specialty: "Wrestling", note: "Pressure chains, wall work focus." },
-    ],
-    reviews: [
-      { user: "Nmm", rating: 4.5, text: "Good structure + clean facility. Busy at peak time.", date: "2026-01-12" },
-      { user: "Verified member", rating: 4.0, text: "Solid for consistency. Great conditioning options.", date: "2026-01-18" },
-    ],
-  },
-  {
-    slug: "kuma-team",
-    name: "Kuma Team",
-    city: "Dubai",
-    country: "UAE",
-    address: "Al Quoz Industrial Area 3, Dubai",
-    verified: true,
-    discipline: "Wrestling",
-    level: "All levels",
-    price: "$$",
-    intensity: "Hard",
-    tags: ["wrestling-heavy", "sambo", "competition"],
-    maps: "https://maps.google.com",
-    about:
-      "Competition-leaning room. Pace is high. Expect grind. Great if you want pressure and real rounds.",
-    highlights: [
-      "Hard rounds, real room culture",
-      "Wrestling-heavy sessions",
-      "Competition mindset",
-    ],
-    classes: [
-      { name: "Wrestling Room", days: "Mon/Wed/Fri", time: "5:00pm", intensity: "Hard" },
-      { name: "Sambo Skills", days: "Tue/Thu", time: "6:30pm", intensity: "Technical" },
-    ],
-    coaches: [{ name: "Coach K", specialty: "Wrestling + Sambo", note: "Relentless chain style." }],
-    reviews: [{ user: "User 27", rating: 5.0, text: "Best grind room. Not for casuals.", date: "2026-01-04" }],
-  },
-  {
-    slug: "renzo-gracie-dubai",
-    name: "Renzo Gracie Dubai",
-    city: "Dubai",
-    country: "UAE",
-    verified: true,
-    discipline: "BJJ",
-    level: "Mixed",
-    price: "$$$",
-    intensity: "Moderate",
-    tags: ["bjj", "grappling"],
-    maps: "https://maps.google.com",
-    about:
-      "Technical environment. Strong base for grappling control and submission defense.",
-    highlights: ["Good fundamentals", "Structured curriculum", "Solid training partners"],
-    classes: [
-      { name: "BJJ Fundamentals", days: "Daily", time: "7:00pm", intensity: "Technical" },
-      { name: "No-Gi", days: "Tue/Thu", time: "8:00pm", intensity: "Moderate" },
-    ],
-    coaches: [{ name: "Coach R", specialty: "BJJ", note: "Details + positional control." }],
-    reviews: [{ user: "User 11", rating: 4.5, text: "Great structure. Good mat culture.", date: "2026-01-10" }],
-  },
-];
-
 type Tab = "overview" | "classes" | "coaches" | "reviews";
 
 export default function GymsSlugClient({ slug }: { slug: string }) {
   const { user } = useProfile();
-  const gym = useMemo(() => SAMPLE_GYMS.find((g) => g.slug === slug) ?? null, [slug]);
+
+  const [gym, setGym] = useState<Gym | null>(null);
+  const [coaches, setCoaches] = useState<GymCoach[]>([]);
+  const [programs, setPrograms] = useState<GymProgram[]>([]);
+  const [rating, setRating] = useState<GymRating | null>(null);
+  const [related, setRelated] = useState<Gym[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
 
   const [tab, setTab] = useState<Tab>("overview");
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    if (!gym) return;
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      setNotFound(false);
+      try {
+        const res = await fetch(`/api/gyms/${encodeURIComponent(slug)}`);
+        if (res.status === 404) {
+          if (!cancelled) setNotFound(true);
+          return;
+        }
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.error || "Failed to load gym.");
+        if (cancelled) return;
+
+        setGym(json.gym);
+        setCoaches(json.coaches || []);
+        setPrograms(json.programs || []);
+        setRating(json.rating || null);
+
+        if (json.gym?.city) {
+          const relatedRes = await fetch(
+            `/api/gyms?q=${encodeURIComponent(json.gym.city)}`
+          );
+          const relatedJson = await relatedRes.json();
+          if (!cancelled && relatedRes.ok) {
+            setRelated(
+              (relatedJson.gyms || [])
+                .filter((g: Gym) => g.slug !== json.gym.slug)
+                .slice(0, 3)
+            );
+          }
+        }
+      } catch {
+        if (!cancelled) setNotFound(true);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [slug]);
+
+  useEffect(() => {
+    const gymSlug = gym?.slug;
+    if (!gymSlug) return;
     const ids = readUserJson<string[]>(user?.id, "disciplin_saved_gyms_v1") ?? [];
-    queueMicrotask(() => setSaved(ids.includes(gym.slug)));
-  }, [gym, user?.id]);
+    queueMicrotask(() => setSaved(ids.includes(gymSlug)));
+  }, [gym?.slug, user?.id]);
 
   function toggleSaved() {
     if (!gym) return;
     const ids = readUserJson<string[]>(user?.id, "disciplin_saved_gyms_v1") ?? [];
-    const next = saved ? ids.filter((x) => x !== gym.slug) : Array.from(new Set([gym.slug, ...ids]));
+    const next = saved
+      ? ids.filter((x) => x !== gym.slug)
+      : Array.from(new Set([gym.slug, ...ids]));
     writeUserJson(user?.id, "disciplin_saved_gyms_v1", next);
     setSaved(!saved);
   }
 
-  const avgRating = useMemo(() => {
-    if (!gym?.reviews?.length) return null;
-    const sum = gym.reviews.reduce((a, r) => a + r.rating, 0);
-    return Math.round((sum / gym.reviews.length) * 10) / 10;
-  }, [gym?.reviews]);
+  const disciplines = useMemo(
+    () => gym?.disciplines?.length ? gym.disciplines : (gym?.primary_discipline ? [gym.primary_discipline] : []),
+    [gym]
+  );
 
-  const related = useMemo(() => {
-    if (!gym) return [];
-    return SAMPLE_GYMS.filter((g) => g.slug !== gym.slug && g.city === gym.city).slice(0, 3);
-  }, [gym]);
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-50 px-6 py-10">
+        <div className="max-w-6xl mx-auto rounded-3xl border border-slate-800 bg-slate-900/40 p-8">
+          <p className="text-sm text-slate-400">Loading gym…</p>
+        </div>
+      </main>
+    );
+  }
 
-  if (!gym) {
+  if (notFound || !gym) {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-50 px-6 py-10">
         <div className="max-w-6xl mx-auto rounded-3xl border border-slate-800 bg-slate-900/40 p-8">
@@ -214,7 +201,7 @@ export default function GymsSlugClient({ slug }: { slug: string }) {
 
               <div className="mt-3 flex items-center gap-2">
                 <p className="text-xs font-semibold tracking-[0.25em] text-emerald-400">GYM</p>
-                {gym.verified && (
+                {gym.is_verified && (
                   <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">
                     Verified
                   </span>
@@ -226,32 +213,38 @@ export default function GymsSlugClient({ slug }: { slug: string }) {
                 {gym.city}, {gym.country}{gym.address ? ` · ${gym.address}` : ""}
               </p>
 
-              <div className="mt-3 flex items-center gap-3">
-                <span className="rounded-full border border-slate-700 bg-slate-950/30 px-3 py-1 text-xs text-slate-200">
-                  {gym.discipline}
-                </span>
-                {gym.level && (
+              <div className="mt-3 flex items-center gap-3 flex-wrap">
+                {disciplines.map((d) => (
+                  <span
+                    key={d}
+                    className="rounded-full border border-slate-700 bg-slate-950/30 px-3 py-1 text-xs text-slate-200"
+                  >
+                    {d}
+                  </span>
+                ))}
+                {gym.level_label && (
                   <span className="rounded-full border border-slate-700 bg-slate-950/30 px-3 py-1 text-xs text-slate-200">
-                    Level: {gym.level}
+                    Level: {gym.level_label}
                   </span>
                 )}
-                {gym.price && (
+                {gym.price_label && (
                   <span className="rounded-full border border-slate-700 bg-slate-950/30 px-3 py-1 text-xs text-slate-200">
-                    Price: {gym.price}
+                    Price: {gym.price_label}
                   </span>
                 )}
-                {gym.intensity && (
+                {gym.intensity_label && (
                   <span className="rounded-full border border-slate-700 bg-slate-950/30 px-3 py-1 text-xs text-slate-200">
-                    Intensity: {gym.intensity}
+                    Intensity: {gym.intensity_label}
                   </span>
                 )}
               </div>
 
-              {avgRating !== null && (
+              {rating?.rating_avg != null && (
                 <div className="mt-3 flex items-center gap-3">
-                  <Stars value={avgRating} />
+                  <Stars value={rating.rating_avg} />
                   <p className="text-xs text-slate-400">
-                    {avgRating} · {gym.reviews?.length ?? 0} reviews
+                    {rating.rating_avg} · {rating.rating_count ?? 0} ratings
+                    {rating.source ? ` · source: ${rating.source}` : ""}
                   </p>
                 </div>
               )}
@@ -271,12 +264,12 @@ export default function GymsSlugClient({ slug }: { slug: string }) {
               </button>
 
               <a
-                href={gym.maps ?? "#"}
+                href={gym.google_maps_url ?? "#"}
                 target="_blank"
                 rel="noreferrer"
                 className={cn(
                   "rounded-full px-4 py-2 text-sm font-semibold text-center",
-                  gym.maps ? "bg-emerald-500 text-slate-950 hover:bg-emerald-400" : "bg-white/10 text-white/40"
+                  gym.google_maps_url ? "bg-emerald-500 text-slate-950 hover:bg-emerald-400" : "bg-white/10 text-white/40"
                 )}
               >
                 Open in Google Maps
@@ -299,16 +292,18 @@ export default function GymsSlugClient({ slug }: { slug: string }) {
           </div>
 
           {/* tags */}
-          <div className="mt-5 flex flex-wrap gap-2">
-            {(gym.tags ?? []).map((t) => (
-              <span
-                key={t}
-                className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-100"
-              >
-                {t}
-              </span>
-            ))}
-          </div>
+          {(gym.style_tags ?? []).length > 0 && (
+            <div className="mt-5 flex flex-wrap gap-2">
+              {(gym.style_tags ?? []).map((t) => (
+                <span
+                  key={t}
+                  className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-100"
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Tabs */}
@@ -318,7 +313,7 @@ export default function GymsSlugClient({ slug }: { slug: string }) {
               ["overview", "Overview"],
               ["classes", "Classes"],
               ["coaches", "Coaches"],
-              ["reviews", "Reviews"],
+              ["reviews", "Ratings"],
             ] as Array<[Tab, string]>
           ).map(([id, label]) => {
             const on = tab === id;
@@ -346,63 +341,39 @@ export default function GymsSlugClient({ slug }: { slug: string }) {
               <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
                 <p className="text-xs font-semibold tracking-[0.25em] text-slate-300">ABOUT</p>
                 <p className="mt-2 text-sm text-slate-200 leading-relaxed">
-                  {gym.about ?? "No description yet."}
+                  {gym.coach_notes || "No description yet."}
                 </p>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                  <p className="text-xs font-semibold tracking-[0.25em] text-slate-300">HIGHLIGHTS</p>
-                  <ul className="mt-2 space-y-2 text-sm text-slate-200">
-                    {(gym.highlights ?? ["Add highlights later."]).map((h) => (
-                      <li key={h} className="flex items-start gap-2">
-                        <span className="text-emerald-300 mt-[2px]">•</span>
-                        <span>{h}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                  <p className="text-xs font-semibold tracking-[0.25em] text-slate-300">DISCIPLIN FIT</p>
-                  <p className="mt-2 text-sm text-slate-200">
-                    If you want{" "}
-                    <span className="text-emerald-200 font-semibold">consistency</span>, pick structured classes.
-                    If you want{" "}
-                    <span className="text-emerald-200 font-semibold">pressure</span>, pick a hard room.
-                  </p>
-                  <p className="mt-3 text-xs text-slate-400">
-                    Later: Sensei will match this gym to your profile + camp goal.
-                  </p>
-                </div>
               </div>
             </div>
           )}
 
           {tab === "classes" && (
             <div className="space-y-3">
-              <p className="text-sm text-slate-300">
-                Weekly structure preview (dummy data until you connect DB).
-              </p>
-
               <div className="grid gap-3">
-                {(gym.classes ?? []).length === 0 ? (
-                  <p className="text-xs text-slate-500">No class schedule yet.</p>
+                {programs.length === 0 ? (
+                  <p className="text-xs text-slate-500">No class schedule on file yet.</p>
                 ) : (
-                  gym.classes!.map((c, i) => (
+                  programs.map((p) => (
                     <div
-                      key={i}
+                      key={p.id}
                       className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 flex items-start justify-between gap-3"
                     >
                       <div>
-                        <p className="text-sm font-semibold">{c.name}</p>
-                        <p className="mt-1 text-xs text-slate-400">
-                          {c.days} · {c.time}
-                        </p>
+                        <p className="text-sm font-semibold">{p.program_type}</p>
+                        {p.notes && <p className="mt-1 text-xs text-slate-400">{p.notes}</p>}
                       </div>
-                      <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-100">
-                        {c.intensity}
-                      </span>
+                      <div className="flex flex-col items-end gap-1">
+                        {p.level_label && (
+                          <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-100">
+                            {p.level_label}
+                          </span>
+                        )}
+                        {p.frequency_per_week != null && (
+                          <span className="text-[11px] text-slate-400">
+                            {p.frequency_per_week}x / week
+                          </span>
+                        )}
+                      </div>
                     </div>
                   ))
                 )}
@@ -412,16 +383,20 @@ export default function GymsSlugClient({ slug }: { slug: string }) {
 
           {tab === "coaches" && (
             <div className="space-y-3">
-              <p className="text-sm text-slate-300">Coaches (dummy data for now).</p>
               <div className="grid gap-3 md:grid-cols-2">
-                {(gym.coaches ?? []).length === 0 ? (
+                {coaches.length === 0 ? (
                   <p className="text-xs text-slate-500">No coaches listed yet.</p>
                 ) : (
-                  gym.coaches!.map((c, i) => (
-                    <div key={i} className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                  coaches.map((c) => (
+                    <div key={c.id} className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
                       <p className="text-sm font-semibold">{c.name}</p>
-                      <p className="mt-1 text-xs text-emerald-200">{c.specialty}</p>
-                      {c.note && <p className="mt-2 text-xs text-slate-400">{c.note}</p>}
+                      {c.role && <p className="mt-1 text-xs text-emerald-200">{c.role}</p>}
+                      {(c.specialties ?? []).length > 0 && (
+                        <p className="mt-1 text-xs text-slate-400">
+                          {(c.specialties ?? []).join(" · ")}
+                        </p>
+                      )}
+                      {c.credentials && <p className="mt-2 text-xs text-slate-400">{c.credentials}</p>}
                     </div>
                   ))
                 )}
@@ -432,28 +407,18 @@ export default function GymsSlugClient({ slug }: { slug: string }) {
           {tab === "reviews" && (
             <div className="space-y-4">
               <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                <p className="text-xs font-semibold tracking-[0.25em] text-slate-300">REVIEWS</p>
-                <p className="mt-2 text-xs text-slate-400">
-                  Later: verified reviews + anti-fake checks.
-                </p>
-              </div>
-
-              <div className="grid gap-3">
-                {(gym.reviews ?? []).length === 0 ? (
-                  <p className="text-xs text-slate-500">No reviews yet.</p>
+                {rating?.rating_avg != null ? (
+                  <div className="flex items-center gap-3">
+                    <Stars value={rating.rating_avg} />
+                    <p className="text-sm text-slate-200">
+                      {rating.rating_avg} average from {rating.rating_count ?? 0} ratings
+                      {rating.source ? ` (source: ${rating.source})` : ""}
+                    </p>
+                  </div>
                 ) : (
-                  gym.reviews!.map((r, i) => (
-                    <div key={i} className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold">{r.user}</p>
-                        <div className="flex items-center gap-2">
-                          <Stars value={r.rating} />
-                          <span className="text-xs text-slate-400">{r.date}</span>
-                        </div>
-                      </div>
-                      <p className="mt-2 text-sm text-slate-200 leading-relaxed">{r.text}</p>
-                    </div>
-                  ))
+                  <p className="text-xs text-slate-500">
+                    No verified ratings yet for this gym.
+                  </p>
                 )}
               </div>
             </div>
@@ -476,21 +441,18 @@ export default function GymsSlugClient({ slug }: { slug: string }) {
                       <p className="text-sm font-semibold">{g.name}</p>
                       <p className="text-xs text-slate-400">{g.city}, {g.country}</p>
                     </div>
-                    {g.verified && (
+                    {g.is_verified && (
                       <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-[11px] text-emerald-100">
                         Verified
                       </span>
                     )}
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <span className="rounded-full border border-slate-700 bg-slate-950/30 px-3 py-1 text-xs text-slate-200">
-                      {g.discipline}
-                    </span>
-                    {g.intensity && (
-                      <span className="rounded-full border border-slate-700 bg-slate-950/30 px-3 py-1 text-xs text-slate-200">
-                        {g.intensity}
+                    {(g.disciplines?.length ? g.disciplines : g.primary_discipline ? [g.primary_discipline] : []).map((d) => (
+                      <span key={d} className="rounded-full border border-slate-700 bg-slate-950/30 px-3 py-1 text-xs text-slate-200">
+                        {d}
                       </span>
-                    )}
+                    ))}
                   </div>
                 </Link>
               ))}
