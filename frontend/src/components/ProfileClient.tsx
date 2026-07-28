@@ -150,20 +150,48 @@ function LegalControlsSection() {
 
 export default function ProfileClient({ embedded = false }: { embedded?: boolean } = {}) {
   const { authority } = useWorkflow();
-  const coachingSummary =
+  // This section answers one question: can coach-approved work exist right now?
+  // Connection status is the Coach connection card's question and is not
+  // restated here, so the two sections never describe the same state twice.
+  const coachingAuthority =
     authority.authorityState === "COACH_BACKEND_UNAVAILABLE"
-      ? "Your coach connection cannot be confirmed right now."
-      : authority.authorityState === "NO_COACH_CONNECTED"
-        ? "Your notes and evidence remain athlete directed until a coach connects."
-        : authority.authorityState === "COACH_INVITATION_PENDING"
-          ? "Your coach must accept the invitation before they can approve work."
-          : authority.authorityState === "ATHLETE_DIRECTED"
-            ? "Your work remains athlete directed and is not coach approved."
-            : authority.authorityState === "HAS_COACH_PENDING_REVIEW"
-              ? "Your coach is reviewing the recorded correction."
-              : authority.authorityState === "COACH_APPROVED_MISSION"
-                ? "Your connected coach approved the current mission."
-                : "Your coach is connected. No mission is approved yet.";
+      ? {
+          value: "Unconfirmed",
+          detail:
+            "No coach-approved work can be served until your connection is confirmed. What you record stays observation only.",
+        }
+      : authority.authorityState === "COACH_APPROVED_MISSION"
+        ? {
+            value: "Coach approved",
+            detail: "Your connected coach approved the current mission.",
+          }
+        : authority.authorityState === "HAS_COACH_PENDING_REVIEW"
+          ? {
+              value: "Awaiting review",
+              detail:
+                "Your coach is reviewing the recorded correction. Nothing is approved yet.",
+            }
+          : authority.authorityState === "COACH_INVITATION_PENDING"
+            ? {
+                value: "Athlete directed",
+                detail:
+                  "Your invited coach cannot approve work until they accept.",
+              }
+            : authority.authorityState === "ATHLETE_DIRECTED"
+              ? {
+                  value: "Athlete directed",
+                  detail: "Your work is recorded but is not coach approved.",
+                }
+              : authority.authorityState === "NO_COACH_CONNECTED"
+                ? {
+                    value: "Athlete directed",
+                    detail: "Nothing you record is coach approved yet.",
+                  }
+                : {
+                    value: "No approved mission",
+                    detail:
+                      "Your coach can approve work. Nothing is approved yet.",
+                  };
   return (
     <AppShell
       badge={embedded ? undefined : "ATHLETE PROFILE"}
@@ -174,12 +202,10 @@ export default function ProfileClient({ embedded = false }: { embedded?: boolean
       <section className="rounded-[22px] border border-white/[0.08] bg-white/[0.025] px-5 py-4">
         <p className="app-label text-emerald-200/65">Coaching authority</p>
         <p className="mt-2 text-base font-semibold text-white">
-          {authority.authorityState === "NO_COACH_CONNECTED"
-            ? "Athlete directed"
-            : authority.fuel.authorityLabel}
+          {coachingAuthority.value}
         </p>
         <p className="mt-1 text-sm leading-6 text-white/48">
-          {coachingSummary}
+          {coachingAuthority.detail}
         </p>
       </section>
       <CoachConnectionCard />

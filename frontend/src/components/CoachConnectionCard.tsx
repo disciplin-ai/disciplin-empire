@@ -104,12 +104,27 @@ export default function CoachConnectionCard() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="app-label text-emerald-200/70">Coach connection</p>
-          <h2 className="app-title-card mt-2">{coachConnectionLabel(relationship)}</h2>
-          <p className="app-body-secondary mt-2 max-w-2xl">
-            {relationship
-              ? "Only the coach who accepts this invitation can review and approve your work."
-              : "Connect your coach so they can review and approve the corrections you record."}
-          </p>
+          {/*
+            A null relationship means "no coach" only once the state has
+            actually loaded. While loading, or when the read failed, the
+            connection is unknown — reporting "No coach connected" there would
+            state an unverified claim as fact and contradict the authority
+            state, which correctly reports the connection as unconfirmed.
+          */}
+          <h2 className="app-title-card mt-2">
+            {loading
+              ? "Checking connection"
+              : loadError
+                ? "Connection could not be confirmed"
+                : coachConnectionLabel(relationship)}
+          </h2>
+          {loading || loadError ? null : (
+            <p className="app-body-secondary mt-2 max-w-2xl">
+              {relationship
+                ? "Only the coach who accepts this invitation can review and approve your work."
+                : "Connect your coach so they can review and approve the corrections you record."}
+            </p>
+          )}
         </div>
         {relationship?.status === "connected" ? (
           <Link href="/dashboard" className="app-button-secondary">Return to Dashboard</Link>
