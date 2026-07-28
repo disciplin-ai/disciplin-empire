@@ -1,14 +1,18 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 
 export default function Template({ children }: { children: React.ReactNode }) {
+  const reduceMotion = useReducedMotion();
   return (
     <motion.div
-      initial={{ opacity: 0, y: 10, filter: "blur(8px)" }}
-      animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+      // Transform and filter create containing blocks for fixed descendants.
+      // Keep route motion opacity-only so shell navigation and drawers remain
+      // fixed to the viewport rather than the animated page wrapper.
+      initial={reduceMotion ? false : { opacity: 0 }}
+      animate={{ opacity: 1 }}
       transition={{
-        duration: 0.28,
+        duration: reduceMotion ? 0 : 0.24,
         ease: [0.22, 1, 0.36, 1],
       }}
     >

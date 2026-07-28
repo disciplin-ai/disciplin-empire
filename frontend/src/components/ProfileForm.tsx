@@ -547,7 +547,7 @@ export default function ProfileForm() {
       return;
     }
 
-    setNotice("Fighter file saved.");
+    setNotice("Profile saved.");
   }
 
   const daysRemaining = useMemo(
@@ -555,35 +555,22 @@ export default function ProfileForm() {
     [form.fightDate]
   );
 
-  const fileDepth = [
-    form.name,
-    form.baseArt,
-    form.competitionLevel,
-    form.currentPhase,
-    form.fighterArchetype,
-    form.currentFocus,
-    form.coachingStyle,
-    form.gym,
-  ].filter(Boolean).length;
-
   if (loading) {
     return (
-      <div className="rounded-[28px] border border-white/[0.08] bg-white/[0.03] p-6 text-sm text-white/55">
-        Loading fighter file...
+      <div className="app-card flex items-center gap-3 p-6 text-sm text-white/55" aria-busy="true">
+        <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-300" /> Loading your profile…
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      <section className="overflow-hidden rounded-[34px] border border-white/[0.08] bg-[radial-gradient(circle_at_18%_0%,rgba(52,211,153,0.16),transparent_32%),radial-gradient(circle_at_84%_8%,rgba(250,204,21,0.12),transparent_30%),linear-gradient(145deg,rgba(16,30,52,0.96),rgba(3,10,22,0.98)_58%,rgba(2,8,16,1))] shadow-[0_24px_90px_rgba(0,0,0,0.42)]">
+      <section className="overflow-hidden rounded-[24px] border border-white/[0.08] bg-[radial-gradient(circle_at_18%_0%,rgba(52,211,153,0.12),transparent_34%),radial-gradient(circle_at_84%_8%,rgba(250,204,21,0.08),transparent_32%),linear-gradient(145deg,rgba(16,30,52,0.96),rgba(3,10,22,0.98)_58%,rgba(2,8,16,1))] shadow-[0_20px_70px_rgba(0,0,0,0.32)]">
         <div className="p-5 md:p-7">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap gap-2">
-              <Chip tone="emerald">Fighter file</Chip>
-
               <Chip tone={form.currentFocus ? "gold" : "amber"}>
-                {form.currentFocus ? "Focus locked" : "Focus missing"}
+                {form.currentFocus ? "Focus set" : "Focus not set"}
               </Chip>
 
               <Chip
@@ -594,22 +581,20 @@ export default function ProfileForm() {
                 }
               >
                 {activeConstraintsText.trim()
-                  ? "Limits active"
-                  : "No limits"}
+                  ? "Restrictions set"
+                  : "No restrictions"}
               </Chip>
             </div>
-
-            <Chip tone="cyan">{fileDepth}/8 depth</Chip>
           </div>
 
           <div className="mt-7 grid gap-6 lg:grid-cols-[1fr_320px]">
             <div className="min-w-0">
               <div className="text-[11px] font-semibold uppercase tracking-[0.3em] text-white/42">
-                Operating identity
+                Athlete profile
               </div>
 
-              <h1 className="mt-3 text-5xl font-bold leading-none tracking-[-0.04em] text-white md:text-7xl">
-                {compact(form.name, "Unnamed fighter")}
+              <h1 className="mt-3 text-[clamp(2.25rem,6vw,3.5rem)] font-semibold leading-none tracking-[-0.04em] text-white">
+                {compact(form.name, "Unnamed athlete")}
               </h1>
 
               <div className="mt-5 flex flex-wrap gap-2">
@@ -620,7 +605,7 @@ export default function ProfileForm() {
                 <Chip tone="cyan">
                   {compact(
                     form.fighterArchetype,
-                    "Archetype missing"
+                    "Style not set"
                   )}
                 </Chip>
 
@@ -667,8 +652,8 @@ export default function ProfileForm() {
 
       {section === "identity" && (
         <IOSPanel
-          title="Fighter identity"
-          label="Passport"
+          title="Athlete identity"
+          label="Profile"
           right={<Chip tone="emerald">Core</Chip>}
         >
           <div className="grid gap-3 md:grid-cols-2">
@@ -681,7 +666,7 @@ export default function ProfileForm() {
                 onChange={(event) =>
                   patch("name", event.target.value)
                 }
-                placeholder="Dylan"
+                placeholder="Preferred name"
               />
             </Cell>
 
@@ -711,7 +696,11 @@ export default function ProfileForm() {
 
             <Cell
               label="Secondary arts"
-              value={`${form.secondaryArts?.length ?? 0} loaded`}
+              value={
+                form.secondaryArts?.length
+                  ? `${form.secondaryArts.length} selected`
+                  : "None selected"
+              }
               tone="cyan"
             >
               <OptionGrid
@@ -806,7 +795,7 @@ export default function ProfileForm() {
 
             <Cell
               label="Injury history"
-              value={form.injuryHistory ? "Loaded" : "None"}
+              value={form.injuryHistory ? "Added" : "Not set"}
             >
               <TextArea
                 rows={4}
@@ -820,7 +809,7 @@ export default function ProfileForm() {
 
             <Cell
               label="Hard boundaries"
-              value={form.hardBoundaries ? "Loaded" : "None"}
+              value={form.hardBoundaries ? "Added" : "Not set"}
             >
               <TextArea
                 rows={4}
@@ -834,7 +823,7 @@ export default function ProfileForm() {
 
             <Cell
               label="Life load"
-              value={form.lifeLoad ? "Loaded" : "None"}
+              value={form.lifeLoad ? "Added" : "Not set"}
             >
               <TextArea
                 rows={3}
@@ -851,9 +840,9 @@ export default function ProfileForm() {
 
       {section === "style" && (
         <IOSPanel
-          title="Fighter archetype"
-          label="Style model"
-          right={<Chip tone="cyan">Identity</Chip>}
+          title="Fighting style"
+          label="Style"
+          right={<Chip tone="cyan">Athlete</Chip>}
         >
           <div className="grid gap-3">
             <Cell
@@ -899,7 +888,7 @@ export default function ProfileForm() {
             <div className="grid gap-3 md:grid-cols-2">
               <Cell
                 label="Strengths"
-                value={form.strengths ? "Loaded" : "None"}
+                value={form.strengths ? "Added" : "Not set"}
               >
                 <TextArea
                   rows={4}
@@ -913,7 +902,7 @@ export default function ProfileForm() {
 
               <Cell
                 label="Weaknesses"
-                value={form.weaknesses ? "Loaded" : "None"}
+                value={form.weaknesses ? "Added" : "Not set"}
               >
                 <TextArea
                   rows={4}
@@ -933,7 +922,7 @@ export default function ProfileForm() {
         <IOSPanel
           title="Current focus"
           label="One active target"
-          right={<Chip tone="gold">Locked layer</Chip>}
+          right={<Chip tone="gold">Active</Chip>}
         >
           <div className="grid gap-3">
             <Cell
@@ -952,7 +941,7 @@ export default function ProfileForm() {
 
             <Cell
               label="Current camp goal"
-              value={form.campGoal ? "Loaded" : "Missing"}
+              value={form.campGoal ? "Added" : "Not set"}
             >
               <TextArea
                 rows={4}
@@ -966,7 +955,7 @@ export default function ProfileForm() {
 
             <Cell
               label="Recent camp"
-              value={form.recentCamp ? "Loaded" : "Missing"}
+              value={form.recentCamp ? "Added" : "Not set"}
             >
               <TextArea
                 rows={4}
@@ -984,8 +973,8 @@ export default function ProfileForm() {
       {section === "history" && (
         <IOSPanel
           title="Correction history"
-          label="Progression"
-          right={<Chip tone="emerald">Proof trail</Chip>}
+          label="Training history"
+          right={<Chip tone="emerald">Progress</Chip>}
         >
           <div className="grid gap-3">
             <Cell
@@ -1003,7 +992,7 @@ export default function ProfileForm() {
             </Cell>
 
             <Cell
-              label="Current lock"
+              label="Completion target"
               value={compact(form.currentLock)}
               tone="gold"
             >
@@ -1012,7 +1001,7 @@ export default function ProfileForm() {
                 onChange={(event) =>
                   patch("currentLock", event.target.value)
                 }
-                placeholder="Locked until 5 clean proof reps"
+                placeholder="Keep this correction until five clean reps"
               />
             </Cell>
 
@@ -1053,8 +1042,8 @@ export default function ProfileForm() {
 
       {section === "coach" && (
         <IOSPanel
-          title="Coaching style"
-          label="Sensei voice input"
+          title="Guidance style"
+          label="How Sensei should speak"
           right={
             <Chip tone="violet">
               {compact(form.coachingStyle, "Direct")}
@@ -1063,7 +1052,7 @@ export default function ProfileForm() {
         >
           <div className="grid gap-3">
             <Cell
-              label="Coach mode"
+              label="Guidance style"
               value={compact(form.coachingStyle)}
               tone="violet"
             >
@@ -1078,7 +1067,7 @@ export default function ProfileForm() {
 
             <Cell
               label="Boundaries notes"
-              value={form.boundariesNotes ? "Loaded" : "None"}
+              value={form.boundariesNotes ? "Added" : "Not set"}
             >
               <TextArea
                 rows={4}
@@ -1086,7 +1075,7 @@ export default function ProfileForm() {
                 onChange={(event) =>
                   patch("boundariesNotes", event.target.value)
                 }
-                placeholder="What should the system avoid? What should it enforce?"
+                placeholder="What should guidance avoid or reinforce?"
               />
             </Cell>
 
@@ -1158,7 +1147,7 @@ export default function ProfileForm() {
 
             <Cell
               label="Competition goals"
-              value={form.competitionGoals ? "Loaded" : "Missing"}
+              value={form.competitionGoals ? "Added" : "Not set"}
             >
               <TextArea
                 rows={4}
@@ -1172,7 +1161,7 @@ export default function ProfileForm() {
 
             <Cell
               label="Schedule notes"
-              value={form.scheduleNotes ? "Loaded" : "Missing"}
+              value={form.scheduleNotes ? "Added" : "Not set"}
             >
               <TextArea
                 rows={3}
@@ -1189,7 +1178,7 @@ export default function ProfileForm() {
 
       {section === "readiness" && (
         <IOSPanel
-          title="Readiness snapshot"
+          title="Current readiness"
           label="Body state"
           right={
             <Chip tone="amber">
@@ -1448,7 +1437,7 @@ export default function ProfileForm() {
               <Cell
                 label="Diet notes"
                 value={
-                  form.religiousDietNotes ? "Loaded" : "None"
+                  form.religiousDietNotes ? "Added" : "Not set"
                 }
               >
                 <TextArea
@@ -1491,7 +1480,7 @@ export default function ProfileForm() {
           disabled={saving}
           className="rounded-[18px] bg-emerald-300 px-6 py-3 text-sm font-semibold text-[#03120d] transition hover:bg-emerald-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {saving ? "Saving..." : "Save file"}
+          {saving ? "Saving..." : "Save profile"}
         </button>
       </div>
     </div>

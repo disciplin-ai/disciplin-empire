@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { logServerError, requestId, safeServerError } from "@/lib/security/responses";
 
-export async function POST() {
+export async function POST(req: Request) {
+  const id = requestId(req);
   const supabase = await createSupabaseServerClient();
 
   const {
@@ -22,7 +24,8 @@ export async function POST() {
   });
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    logServerError("privacy-delete", id);
+    return safeServerError(id);
   }
 
   return NextResponse.json({

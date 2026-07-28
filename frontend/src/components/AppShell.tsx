@@ -22,7 +22,7 @@ export default function AppShell({
   return (
     <div className="mx-auto w-full max-w-5xl space-y-4 px-4 sm:px-6">
       {(title || subtitle || right) && (
-        <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-[#041026] via-[#030b18] to-[#020810] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.35)]">
+        <div className="app-surface-raised p-5">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               {badge && (

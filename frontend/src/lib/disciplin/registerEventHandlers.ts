@@ -9,7 +9,9 @@ export function registerDisciplinEventHandlers() {
   registered = true;
 
   disciplinEvents.on("VISION_ANALYSIS_COMPLETED", async ({ fighterId }) => {
-    console.log("[Disciplin] Vision analysis completed for fighter:", fighterId);
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[Disciplin] Vision analysis completed.");
+    }
 
     await disciplinEvents.emit("CAMP_STATE_REFRESH_REQUESTED", {
       fighterId,
@@ -18,7 +20,9 @@ export function registerDisciplinEventHandlers() {
   });
 
   disciplinEvents.on("FUEL_LOG_CREATED", async ({ fighterId }) => {
-    console.log("[Disciplin] Fuel log created for fighter:", fighterId);
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[Disciplin] Fuel log created.");
+    }
 
     await disciplinEvents.emit("CAMP_STATE_REFRESH_REQUESTED", {
       fighterId,
@@ -27,7 +31,9 @@ export function registerDisciplinEventHandlers() {
   });
 
   disciplinEvents.on("WEIGHT_LOG_CREATED", async ({ fighterId }) => {
-    console.log("[Disciplin] Weight log created for fighter:", fighterId);
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[Disciplin] Weight log created.");
+    }
 
     await disciplinEvents.emit("CAMP_STATE_REFRESH_REQUESTED", {
       fighterId,
@@ -35,10 +41,10 @@ export function registerDisciplinEventHandlers() {
     });
   });
 
-  disciplinEvents.on("CAMP_STATE_REFRESH_REQUESTED", async ({ fighterId, reason }) => {
-    console.log(
-      `[Disciplin] Refresh camp state for fighter ${fighterId}. Reason: ${reason}`
-    );
+  disciplinEvents.on("CAMP_STATE_REFRESH_REQUESTED", async () => {
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[Disciplin] Refresh camp state requested.");
+    }
 
     // Later:
     // 1. re-query Supabase

@@ -1,11 +1,14 @@
 import type { Metadata, Viewport } from "next"
-import { Inter, Geist_Mono } from "next/font/google"
+import { Geist, Geist_Mono } from "next/font/google"
 import { ProfileProvider } from "@/components/ProfileProvider"
+import { CoachProvider } from "@/components/CoachProvider"
+import { WorkflowProvider } from "@/components/WorkflowProvider"
 import "./globals.css"
 
-const inter = Inter({
+const geist = Geist({
   subsets: ["latin"],
-  variable: "--font-inter",
+  variable: "--font-geist-sans",
+  display: "swap",
 })
 
 const geistMono = Geist_Mono({
@@ -30,11 +33,15 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en" className="dark bg-[#020810]">
+    <html lang="en" className="dark bg-[#020810]" data-scroll-behavior="smooth">
       <body
-        className={`${inter.variable} ${geistMono.variable} font-sans antialiased bg-[#020810] text-white`}
+        className={`${geist.variable} ${geistMono.variable} font-sans antialiased bg-[#020810] text-white`}
       >
-        <ProfileProvider>{children}</ProfileProvider>
+        <ProfileProvider>
+          <CoachProvider>
+            <WorkflowProvider>{children}</WorkflowProvider>
+          </CoachProvider>
+        </ProfileProvider>
       </body>
     </html>
   )

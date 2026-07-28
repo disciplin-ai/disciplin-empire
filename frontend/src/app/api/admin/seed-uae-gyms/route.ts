@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { isMaintenanceAuthorized } from "@/lib/security/maintenanceAuth";
+import { logServerError, requestId, safeServerError } from "@/lib/security/responses";
 
 type GymSeed = {
   name: string;
@@ -21,7 +23,6 @@ type GymSeed = {
 };
 
 // 🔐 Re-use your existing admin key (same as sync-uae-gyms)
-const ADMIN_KEY = process.env.ADMIN_SYNC_KEY;
 
 // ✅ Your curated UAE gyms (you can refine coords/URLs later)
 const gyms: GymSeed[] = [
@@ -258,11 +259,16 @@ const gyms: GymSeed[] = [
   },
 ];
 
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const key = url.searchParams.get("key");
+export async function GET() {
+  return new NextResponse("Method Not Allowed", {
+    status: 405,
+    headers: { Allow: "POST" },
+  });
+}
 
-  if (!ADMIN_KEY || !key || key !== ADMIN_KEY) {
+export async function POST(req: Request) {
+  const id = requestId(req);
+  if (!isMaintenanceAuthorized(req)) {
     return new NextResponse("Forbidden", { status: 403 });
   }
 
@@ -279,27 +285,16 @@ export async function GET(req: Request) {
     const { error } = await supabase.from("gyms").insert(gyms);
 
     if (error) {
-      console.error("Error inserting gyms:", error);
-      return NextResponse.json(
-        {
-          message: "Supabase insert failed",
-          error: {
-            message: error.message,
-            details: error.details,
-            hint: error.hint,
-            code: error.code,
-          },
-        },
-        { status: 500 }
-      );
+      logServerError("admin-seed-uae-gyms-insert", id);
+      return safeServerError(id);
     }
 
     return NextResponse.json({
       message: "Seed complete",
       inserted: gyms.length,
     });
-  } catch (err: any) {
-    console.error("Unexpected error in seed-uae-gyms:", err);
-    return new NextResponse("Unexpected error", { status: 500 });
+  } catch (err: unknown) {
+    logServerError("admin-seed-uae-gyms", id, err);
+    return safeServerError(id);
   }
 }

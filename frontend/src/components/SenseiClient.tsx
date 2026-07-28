@@ -2,12 +2,16 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import SenseiScreen from "./SenseiScreen";
+import { useProfile } from "@/components/ProfileProvider";
+import { useShellInteraction } from "@/components/ShellInteractionProvider";
+import { useWorkflow } from "@/components/WorkflowProvider";
+import { useCoach } from "@/components/CoachProvider";
+import { approvedMissionToCorrection } from "@/lib/coach/sensei";
+import { readUserJson, writeUserJson } from "@/lib/userScopedStorage";
 
 import {
-  getLockState,
   isAdvancedPrompt,
   normalizeDirectiveProgress,
-  resetProgressForDirective,
   type DirectiveProgress,
 } from "@/lib/disciplin/types";
 
@@ -16,6 +20,15 @@ import {
   defaultPressureDisciplineCard,
   type PressureDisciplineCard,
 } from "@/lib/disciplin/pressureDiscipline";
+
+import {
+  authorityLabel,
+  type ActiveCorrection,
+  type EvidenceState,
+  type FuelPracticeConstraint,
+  type SenseiConstitutionState,
+  type SenseiOperatingMode,
+} from "@/lib/disciplin/sensei/contracts";
 
 export type MessageSection =
   | "all"
@@ -39,6 +52,8 @@ export type ChatMessage = {
     activeCorrection?: string;
     nextDecision?: string;
     proofStatus?: string;
+    correctionSource?: string;
+    coachApproved?: boolean;
   };
 };
 
@@ -84,6 +99,9 @@ export type SenseiConnected = {
     bestAttacks?: string;
     currentGameplan?: string;
     commonEmotionalTriggers?: string;
+    coachConnected?: boolean;
+    coachId?: string;
+    coachName?: string;
   };
   gyms?: SenseiGym[];
 };
@@ -105,29 +123,10 @@ const LATEST_VISION_KEY = "disciplin_latest_vision";
 const SENSEI_GYMS_KEY = "disciplin_connected_gyms";
 const LATEST_FUEL_KEY = "disciplin_latest_fuel";
 const PRESSURE_CARD_KEY = "disciplin_pressure_card_v1";
+const SENSEI_CONSTITUTION_KEY = "disciplin_sensei_constitution_v1";
 
 const MIN_SENSEI_DELAY_MS = 1750;
 const LOCK_DELAY_MS = 900;
-
-function safeReadJson<T>(key: string): T | null {
-  try {
-    if (typeof window === "undefined") return null;
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return null;
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-function writeJson<T>(key: string, value: T) {
-  try {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // ignore
-  }
-}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -354,18 +353,18 @@ function defaultSessionState(): SenseiSessionState {
   };
 }
 
-function extractConnectedGyms(): SenseiGym[] {
-  const gyms = safeReadJson<SenseiGym[]>(SENSEI_GYMS_KEY);
+function extractConnectedGyms(userId: string | null): SenseiGym[] {
+  const gyms = readUserJson<SenseiGym[]>(userId, SENSEI_GYMS_KEY);
   return Array.isArray(gyms) ? gyms : [];
 }
 
-function extractFuelMemory(): SenseiConnected["fuel"] {
-  const fuel = safeReadJson<{
+function extractFuelMemory(userId: string | null): SenseiConnected["fuel"] {
+  const fuel = readUserJson<{
     present?: boolean;
     score?: number;
     rating?: string;
     decision?: string;
-  }>(LATEST_FUEL_KEY);
+  }>(userId, LATEST_FUEL_KEY);
 
   if (!fuel) return defaultConnected().fuel;
 
@@ -377,12 +376,12 @@ function extractFuelMemory(): SenseiConnected["fuel"] {
   };
 }
 
-function extractVisionDirective(): SenseiConnected["vision"] {
-  const direct = safeReadJson<{
+function extractVisionDirective(userId: string | null): SenseiConnected["vision"] {
+  const direct = readUserJson<{
     correction?: string;
     severity?: string;
     fix_next_rep?: string;
-  }>(VISION_DIRECTIVE_KEY);
+  }>(userId, VISION_DIRECTIVE_KEY);
 
   const correction = cleanInput(direct?.correction);
 
@@ -395,7 +394,7 @@ function extractVisionDirective(): SenseiConnected["vision"] {
     };
   }
 
-  const latest = safeReadJson<any>(LATEST_VISION_KEY);
+  const latest = readUserJson<any>(userId, LATEST_VISION_KEY);
   const finding = Array.isArray(latest?.findings) ? latest.findings[0] : null;
   const title = cleanInput(finding?.title);
 
@@ -406,6 +405,225 @@ function extractVisionDirective(): SenseiConnected["vision"] {
     correction: title,
     severity: cleanInput(finding?.severity) || "HIGH",
     fix_next_rep: cleanMultiline(finding?.fix_next_rep),
+  };
+}
+
+function fuelPracticeConstraint(
+  fuel: SenseiConnected["fuel"]
+): FuelPracticeConstraint {
+  if (!fuel?.present) {
+    return {
+      assessment: "not_assessed",
+      assessedAt: null,
+      maximumResistance: null,
+      restrictions: [],
+      reason: null,
+      sourceEvidenceIds: [],
+    };
+  }
+
+  const score = typeof fuel.score === "number" ? fuel.score : null;
+  const rating = cleanInput(fuel.rating).toUpperCase();
+
+  if (rating === "RED" || rating === "TRASH" || (score !== null && score < 45)) {
+    return {
+      assessment: "assessed",
+      assessedAt: new Date().toISOString(),
+      maximumResistance: "prescribed_reaction",
+      restrictions: ["No live resistance", "Stop when the correction loses shape"],
+      reason: "Today: controlled technical work only. No live resistance.",
+      sourceEvidenceIds: [],
+    };
+  }
+
+  if (rating === "AMBER" || rating === "LOW" || (score !== null && score < 65)) {
+    return {
+      assessment: "assessed",
+      assessedAt: new Date().toISOString(),
+      maximumResistance: "variable_reaction",
+      restrictions: ["Keep resistance controlled"],
+      reason: "Today: controlled resistance only.",
+      sourceEvidenceIds: [],
+    };
+  }
+
+  return {
+    assessment: "assessed",
+    assessedAt: new Date().toISOString(),
+    maximumResistance: "live_resistance",
+    restrictions: [],
+    reason: "Today: no additional practice restriction.",
+    sourceEvidenceIds: [],
+  };
+}
+
+function evidenceStateFromProgress(progress: DirectiveProgress): EvidenceState {
+  if (
+    progress.proofType === "image" ||
+    progress.proofType === "video" ||
+    progress.proofType === "metrics" ||
+    progress.proofType === "self_report"
+  ) {
+    return "evidence_submitted";
+  }
+
+  if (progress.repsCompleted > 0) return "practised";
+  return "planned";
+}
+
+function visionSuggestion(
+  vision: SenseiConnected["vision"]
+): ActiveCorrection | null {
+  const problem = cleanInput(vision?.correction);
+  if (!vision?.present || !problem) return null;
+
+  const cue = cleanInput(vision.fix_next_rep) || problem;
+  const createdAt = new Date().toISOString();
+
+  return {
+    id: `vision:${problem.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+    athleteId: "current-athlete",
+    status: "draft",
+    coachExactCue: cue,
+    performanceProblem: problem,
+    whyItMatters: "Not yet established by the coach.",
+    informationToRecognise: [],
+    decisionRules: [],
+    practiceTask: {
+      setup: "Not yet specified.",
+      athleteTask: "Review the observation before treating it as instruction.",
+      partnerTask: "Not yet specified.",
+      attemptsRequested: null,
+      permittedResistance: "cooperative",
+      restrictions: [],
+    },
+    successCondition: "Not yet specified.",
+    failureCondition: "Not yet specified.",
+    evidenceRequested: {
+      sourcesRequested: ["athlete_reported"],
+      practiceTaskRequired: "Clarify the correction and practice task.",
+      resistanceRequired: "cooperative",
+      attemptsRequested: null,
+      questionForCoach: "Is this the correction you want me carrying?",
+    },
+    provenance: {
+      origin: "disciplin",
+      originalAuthor: {
+        id: "disciplin-vision",
+        name: "Vision",
+        role: "system",
+      },
+      originalWording: problem,
+      createdAt,
+      approval: {
+        status: "not_requested",
+        approvingCoach: null,
+        decidedAt: null,
+        note: null,
+      },
+      supportingEvidenceIds: [],
+      revisions: [],
+      applicableContext: [],
+      confidence: "unknown",
+      limitations: ["Vision observation has not been coach reviewed."],
+    },
+    introducedAt: createdAt,
+    closedAt: null,
+    reopenedFromCorrectionId: null,
+  };
+}
+
+function isCoachAuthoritative(correction: ActiveCorrection | null) {
+  if (!correction) return false;
+  const label = authorityLabel(correction.provenance);
+  return label === "coach_entered" || label === "coach_approved";
+}
+
+function correctionSourceLabel(correction: ActiveCorrection | null) {
+  if (!correction) return "Not recorded";
+
+  const sourceType = (
+    correction.provenance as typeof correction.provenance & {
+      sourceType?: string;
+    }
+  ).sourceType;
+  const sourceLabels: Record<string, string> = {
+    vision_observation: "Vision observation",
+    coach_observation: "Coach observation",
+    coach_conversation: "Coach conversation",
+    competition_review: "Competition review",
+    athlete_reflection: "Athlete reflection",
+    live_coaching: "Live coaching",
+    training_note: "Training note",
+  };
+  if (sourceType && sourceLabels[sourceType]) return sourceLabels[sourceType];
+
+  const context = correction.provenance.applicableContext
+    .join(" ")
+    .toLowerCase();
+  const origin = correction.provenance.origin;
+
+  if (origin === "disciplin") return "Vision observation";
+  if (origin === "athlete") return "Athlete reflection";
+  if (origin === "sensei") return "Sensei hypothesis";
+  if (context.includes("competition")) return "Competition review";
+  if (context.includes("conversation")) return "Coach conversation";
+  if (context.includes("live") || context.includes("corner")) return "Live coaching";
+  if (context.includes("note")) return "Training note";
+  if (context.includes("sparring")) return "Coach observation after sparring";
+  return "Coach observation";
+}
+
+function buildConstitutionState(args: {
+  connected: SenseiConnected;
+  progress: DirectiveProgress;
+  saved?: SenseiConstitutionState | null;
+  serverCorrection?: ActiveCorrection | null;
+  serverAuthorityResolved?: boolean;
+}): SenseiConstitutionState {
+  const operatingMode: SenseiOperatingMode = args.serverAuthorityResolved
+    ? args.serverCorrection
+      ? "coach_connected"
+      : "athlete_only"
+    : args.saved?.operatingMode ||
+      (args.connected.profile?.coachConnected ? "coach_connected" : "athlete_only");
+  const visionCandidate = visionSuggestion(args.connected.vision);
+  const savedActive = args.serverAuthorityResolved
+    ? args.serverCorrection || null
+    : args.saved?.activeCorrection || null;
+  const savedSuggestion = args.saved?.suggestedCorrection || null;
+  const unapprovedSavedActive =
+    savedActive && !isCoachAuthoritative(savedActive) ? savedActive : null;
+  const suggestion =
+    savedSuggestion || unapprovedSavedActive || visionCandidate;
+  const protectedEvidenceStates: EvidenceState[] = [
+    "awaiting_coach_review",
+    "continue_current_correction",
+    "progression_approved",
+    "correction_reopened",
+  ];
+  const evidenceState =
+    args.saved?.evidenceState &&
+    protectedEvidenceStates.includes(args.saved.evidenceState)
+      ? args.saved.evidenceState
+      : evidenceStateFromProgress(args.progress);
+
+  return {
+    operatingMode,
+    activeCorrection: isCoachAuthoritative(savedActive) ? savedActive : null,
+    suggestedCorrection: suggestion,
+    evidenceState,
+    fuelConstraint: fuelPracticeConstraint(args.connected.fuel),
+  };
+}
+
+function emptyConstitutionState(): SenseiConstitutionState {
+  return {
+    operatingMode: "athlete_only",
+    activeCorrection: null,
+    suggestedCorrection: null,
+    evidenceState: "planned",
+    fuelConstraint: fuelPracticeConstraint(undefined),
   };
 }
 
@@ -437,7 +655,27 @@ function timeoutAnswer() {
   ].join("\n");
 }
 
-export default function SenseiClient() {
+export default function SenseiClient({ embedded = false }: { embedded?: boolean } = {}) {
+  const { user, profile } = useProfile();
+  const { openPanel } = useShellInteraction();
+  const { authority } = useWorkflow();
+  const { state: coachState, loading: coachLoading } = useCoach();
+  const serverCorrection = useMemo(() => {
+    const mission = coachState.currentMission;
+    const relationship = coachState.athleteRelationship;
+    if (!mission || !relationship || relationship.status !== "connected") return null;
+    return approvedMissionToCorrection({
+      mission,
+      relationship,
+      originalSubmission:
+        coachState.submissions.find((submission) => submission.id === mission.submission_id) ?? null,
+    });
+  }, [coachState]);
+  const userId = user?.id ?? (
+    process.env.NODE_ENV !== "production" && profile
+      ? "development-preview"
+      : null
+  );
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [pendingQuestion, setPendingQuestion] = useState("");
@@ -457,86 +695,143 @@ export default function SenseiClient() {
   const [pressureCard, setPressureCard] =
     useState<PressureDisciplineCard>(defaultPressureDisciplineCard());
 
-  const [directiveProgress, setDirectiveProgress] =
-    useState<DirectiveProgress>(() =>
-      normalizeDirectiveProgress(
-        safeReadJson<Partial<DirectiveProgress>>(DIRECTIVE_PROGRESS_KEY) || {}
-      )
-    );
+  const [directiveProgress, setDirectiveProgress] = useState<DirectiveProgress>(() => normalizeDirectiveProgress({}));
+
+  const [constitution, setConstitution] = useState<SenseiConstitutionState>(emptyConstitutionState);
+  const [hydratedOwnerId, setHydratedOwnerId] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
-    const saved = safeReadJson<{
+    setHydratedOwnerId(null);
+    setChatMessages([]);
+    setConnected(defaultConnected());
+    setDecisionMode("FALLBACK");
+    setActiveDirective("");
+    setSessionState(defaultSessionState());
+    setPressureCard(defaultPressureDisciplineCard());
+    const nextProgress = normalizeDirectiveProgress(readUserJson<Partial<DirectiveProgress>>(userId, DIRECTIVE_PROGRESS_KEY) || {});
+    setDirectiveProgress(nextProgress);
+
+    const saved = readUserJson<{
       chatMessages?: ChatMessage[];
       connected?: SenseiConnected;
       decisionMode?: "STRICT" | "FALLBACK";
       activeDirective?: string;
       sessionState?: SenseiSessionState;
-    }>(SENSEI_STATE_KEY);
+    }>(userId, SENSEI_STATE_KEY);
 
     if (saved?.chatMessages) setChatMessages(saved.chatMessages);
     if (saved?.connected) setConnected(saved.connected);
     if (saved?.decisionMode) setDecisionMode(saved.decisionMode);
-    if (saved?.activeDirective) setActiveDirective(saved.activeDirective);
     if (saved?.sessionState) setSessionState(saved.sessionState);
 
-    const vision = extractVisionDirective();
-    const fuel = extractFuelMemory();
-    const gyms = extractConnectedGyms();
+    const vision = extractVisionDirective(userId);
+    const fuel = extractFuelMemory(userId);
+    const gyms = extractConnectedGyms(userId);
 
-    setConnected((prev) => ({
-      ...prev,
+    const nextConnected: SenseiConnected = {
+      ...(saved?.connected || defaultConnected()),
       vision,
       fuel,
       gyms,
-    }));
+    };
+    const savedConstitution = readUserJson<SenseiConstitutionState>(userId, SENSEI_CONSTITUTION_KEY);
+    const nextConstitution = buildConstitutionState({
+      connected: nextConnected,
+      progress: nextProgress,
+      saved: savedConstitution,
+      serverCorrection,
+      serverAuthorityResolved: !coachLoading,
+    });
 
-    if (!saved?.activeDirective && vision?.correction) {
-      setActiveDirective(vision.correction);
-    }
+    setConnected(nextConnected);
+    setConstitution(nextConstitution);
+    setActiveDirective(nextConstitution.activeCorrection?.coachExactCue || "");
 
-    const savedPressure = safeReadJson<PressureDisciplineCard>(PRESSURE_CARD_KEY);
+    const savedPressure = readUserJson<PressureDisciplineCard>(userId, PRESSURE_CARD_KEY);
     if (savedPressure) setPressureCard(savedPressure);
-  }, []);
+    queueMicrotask(() => setHydratedOwnerId(userId));
+  }, [coachLoading, serverCorrection, userId]);
 
   useEffect(() => {
-    writeJson(SENSEI_STATE_KEY, {
+    if (hydratedOwnerId !== userId) return;
+    writeUserJson(userId, SENSEI_STATE_KEY, {
       chatMessages: chatMessages.filter((m) => !m.pending),
       connected,
       decisionMode,
       activeDirective,
       sessionState,
     });
-  }, [chatMessages, connected, decisionMode, activeDirective, sessionState]);
+  }, [chatMessages, connected, decisionMode, activeDirective, sessionState, hydratedOwnerId, userId]);
 
   useEffect(() => {
-    writeJson(DIRECTIVE_PROGRESS_KEY, directiveProgress);
-  }, [directiveProgress]);
+    if (hydratedOwnerId !== userId) return;
+    writeUserJson(userId, SENSEI_CONSTITUTION_KEY, constitution);
+  }, [constitution, hydratedOwnerId, userId]);
 
   useEffect(() => {
-    writeJson(PRESSURE_CARD_KEY, pressureCard);
-  }, [pressureCard]);
+    if (hydratedOwnerId !== userId) return;
+    writeUserJson(userId, DIRECTIVE_PROGRESS_KEY, directiveProgress);
+  }, [directiveProgress, hydratedOwnerId, userId]);
+
+  useEffect(() => {
+    if (hydratedOwnerId !== userId) return;
+    writeUserJson(userId, PRESSURE_CARD_KEY, pressureCard);
+  }, [pressureCard, hydratedOwnerId, userId]);
+
+  useEffect(() => {
+    setConstitution((previous) => {
+      return buildConstitutionState({
+        connected,
+        progress: directiveProgress,
+        saved: previous,
+        serverCorrection,
+        serverAuthorityResolved: !coachLoading,
+      });
+    });
+  }, [
+    connected.vision?.present,
+    connected.vision?.correction,
+    connected.vision?.fix_next_rep,
+    connected.fuel?.present,
+    connected.fuel?.score,
+    connected.fuel?.rating,
+    connected.fuel?.decision,
+    connected.profile?.coachConnected,
+    directiveProgress.repsCompleted,
+    directiveProgress.proofType,
+    coachLoading,
+    serverCorrection,
+  ]);
+
+  useEffect(() => {
+    setActiveDirective(constitution.activeCorrection?.coachExactCue || "");
+  }, [constitution.activeCorrection]);
 
   const rawLockState = useMemo(() => {
-    return getLockState({
-      directive: {
-        present: !!activeDirective,
-        correction: activeDirective,
-      },
-      progress: directiveProgress,
-      fuel: connected.fuel,
-    });
-  }, [activeDirective, directiveProgress, connected.fuel]);
+    const verified = constitution.evidenceState === "progression_approved";
+    const hasCorrection = Boolean(constitution.activeCorrection);
+
+    return {
+      verified,
+      locked: hasCorrection && !verified,
+      userMessage: verified
+        ? "Your coach approved progression."
+        : hasCorrection
+          ? "Practice evidence can be submitted. Only coach review can approve progression."
+          : "No active correction is available in the current operating mode.",
+    };
+  }, [constitution.activeCorrection, constitution.evidenceState]);
 
   const screenLockState = {
-    hasDirective: !!activeDirective,
+    hasDirective: !!constitution.activeCorrection,
     verified: rawLockState?.verified === true,
     locked: rawLockState?.locked === true,
     reason:
       rawLockState?.verified === true
         ? ("unlocked" as const)
-        : activeDirective
+        : constitution.activeCorrection
           ? ("directive_unverified" as const)
           : ("no_directive" as const),
     userMessage:
@@ -547,7 +842,7 @@ export default function SenseiClient() {
 
   async function sendQuestion(rawQuestion: string) {
     const question = cleanMultiline(rawQuestion);
-    if (!question || busy) return;
+    if (!question || busy || !authority.senseiAvailable) return;
 
     const startedAt = Date.now();
     const section = inferSectionFromText(question);
@@ -619,6 +914,11 @@ export default function SenseiClient() {
           question,
           section,
           activeDirective,
+          activeCorrection: constitution.activeCorrection,
+          suggestedCorrection: constitution.suggestedCorrection,
+          senseiOperatingMode: constitution.operatingMode,
+          evidenceState: constitution.evidenceState,
+          fuelPracticeConstraint: constitution.fuelConstraint,
           connected,
           pressureCard: pressure,
           session: sessionState,
@@ -635,7 +935,7 @@ export default function SenseiClient() {
 
       const answer = cleanMultiline(data?.answer) || frontendFallbackAnswer();
       const nextDirective =
-        cleanInput(data?.connected?.vision?.correction) || activeDirective;
+        constitution.activeCorrection?.coachExactCue || "";
       const nextDecision =
         cleanInput(data?.operatingDecision?.sessionGoal) ||
         cleanInput(data?.session?.lastCommand) ||
@@ -648,6 +948,11 @@ export default function SenseiClient() {
         cleanInput(data?.connected?.profile?.currentGameplan) ||
         cleanInput(data?.connected?.profile?.aGame) ||
         cleanInput(data?.connected?.profile?.winCondition);
+      const messageCorrection =
+        constitution.activeCorrection || constitution.suggestedCorrection;
+      const messageCoachApproved = isCoachAuthoritative(
+        constitution.activeCorrection
+      );
 
       setChatMessages((prev) =>
         prev.map((msg) =>
@@ -665,6 +970,8 @@ export default function SenseiClient() {
                   activeCorrection: nextDirective,
                   nextDecision,
                   proofStatus: proofStatusFromResponse(data),
+                  correctionSource: correctionSourceLabel(messageCorrection),
+                  coachApproved: messageCoachApproved,
                 },
               }
             : msg
@@ -702,11 +1009,6 @@ export default function SenseiClient() {
 
       if (data?.pressureCard) {
         setPressureCard(data.pressureCard);
-      }
-
-      if (nextDirective && nextDirective !== activeDirective) {
-        setActiveDirective(nextDirective);
-        setDirectiveProgress(resetProgressForDirective(nextDirective));
       }
 
       setSessionState((prev) => ({
@@ -759,6 +1061,7 @@ export default function SenseiClient() {
 
   return (
     <SenseiScreen
+      embedded={embedded}
       chatMessages={chatMessages}
       chatInput={chatInput}
       setChatInput={setChatInput}
@@ -772,6 +1075,10 @@ export default function SenseiClient() {
       directiveProgress={directiveProgress}
       lockState={screenLockState}
       pressureCard={pressureCard}
+      constitution={constitution}
+      authority={authority}
+      onOpenVision={(opener) => openPanel("vision", opener)}
+      onOpenProfile={(opener) => openPanel("profile", opener)}
     />
   );
 }
@@ -790,14 +1097,16 @@ function proofStatusFromResponse(data: {
     repsCompleted?: number;
     repsRequired?: number;
     underResistance?: boolean;
+    proofType?: string;
   };
 }) {
   const state = data.directiveState;
   if (!state) return "";
 
   const completed = Number(state.repsCompleted || 0);
-  const required = Number(state.repsRequired || 0);
-  if (required <= 0) return "";
-  if (completed >= required && state.underResistance === true) return "Earned";
-  return `${completed} of ${required} clean reps`;
+  if (state.proofType && state.proofType !== "none") {
+    return "Evidence submitted — awaiting coach review";
+  }
+  if (completed > 0) return "Practised — no evidence submitted";
+  return "Planned";
 }

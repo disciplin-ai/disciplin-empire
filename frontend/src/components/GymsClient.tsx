@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import { useProfile } from "@/components/ProfileProvider";
+import { writeUserJson } from "@/lib/userScopedStorage";
 
 type Disc = "MMA" | "Wrestling" | "Boxing" | "Sambo" | "BJJ" | "Fitness";
 
@@ -93,11 +95,11 @@ function toSenseiGym(gym: ApiGym): SenseiGym {
   };
 }
 
-function saveGymsForSensei(gyms: ApiGym[]) {
+function saveGymsForSensei(userId: string | null | undefined, gyms: ApiGym[]) {
   const senseiGyms = gyms.map(toSenseiGym);
 
   try {
-    window.localStorage.setItem(SENSEI_GYMS_KEY, JSON.stringify(senseiGyms));
+    writeUserJson(userId, SENSEI_GYMS_KEY, senseiGyms);
     window.dispatchEvent(new Event("disciplin:gyms-updated"));
   } catch {
     // ignore localStorage failures
@@ -105,6 +107,7 @@ function saveGymsForSensei(gyms: ApiGym[]) {
 }
 
 export default function GymsClient() {
+  const { user } = useProfile();
   const [q, setQ] = useState("");
   const [onlyVerified, setOnlyVerified] = useState(false);
   const [disc, setDisc] = useState<"All" | Disc>("All");
@@ -139,13 +142,13 @@ export default function GymsClient() {
 
         if (!cancelled) {
           setGyms(loaded);
-          saveGymsForSensei(loaded);
+          saveGymsForSensei(user?.id, loaded);
         }
       } catch (err: any) {
         if (!cancelled) {
           setError(err?.message || "Failed to load gyms");
           setGyms([]);
-          saveGymsForSensei([]);
+          saveGymsForSensei(user?.id, []);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -157,7 +160,7 @@ export default function GymsClient() {
     return () => {
       cancelled = true;
     };
-  }, [q, onlyVerified, disc]);
+  }, [q, onlyVerified, disc, user?.id]);
 
   const discs: Array<"All" | Disc> = [
     "All",

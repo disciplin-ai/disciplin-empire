@@ -10,6 +10,9 @@ import {
   buildPressureDisciplineCard,
   type PressureDisciplineCard,
 } from "@/lib/disciplin/pressureDiscipline";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { acquireExpensiveRequest, requestIp, type RateLimitLease } from "@/lib/security/rateLimit";
+import { logServerError, rateLimited, requestId, safeServerError, unauthorized } from "@/lib/security/responses";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,8 +21,6 @@ export const maxDuration = 30;
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
-
-const USER_NAME = "Dylan";
 
 type Section =
   | "all"
@@ -42,6 +43,7 @@ type Intent =
   | "proof_decision"
   | "system_navigation"
   | "overview_decision"
+  | "out_of_scope"
   | "general_decision";
 
 type IntentCategory =
@@ -53,6 +55,7 @@ type IntentCategory =
   | "Weight Cut"
   | "Progression"
   | "Proof"
+  | "Out of Scope"
   | "System Navigation";
 
 type ClassifiedIntent = {
@@ -544,9 +547,7 @@ function coachFacingAnswer(input: string) {
     .replace(/\bUNLOCK_NEXT_LAYER\b/g, "progression")
     .replace(/\bRETAIN\b/g, "retention")
     .replace(/\bRECOVER\b/g, "recovery")
-    .replace(/\bHead too far outside\b/gi, "head position")
     .replace(/\bHead dumped outside on shot\b/gi, "head position")
-    .replace(/\bHead too far outside gets\b/gi, "Head position gets")
     .replace(/\bexecuting head position\b/gi, "executing the correction")
     .replace(/^Pressure leak:\s*/gim, "")
     .replace(/^Trigger:\s*/gim, "")
@@ -684,7 +685,7 @@ function wantsProofDecision(q: string) {
     q.includes("logged reps") ||
     q.includes("log reps") ||
     q.includes("verified reps") ||
-        q.includes("under resistance") ||
+    q.includes("under resistance") ||
     q.includes("i fixed it") ||
     q.includes("fixed it") ||
     q.includes("i did it") ||
@@ -877,6 +878,76 @@ function wantsPressureDiscipline(q: string) {
   ]);
 }
 
+function wantsPerformanceContext(q: string) {
+  return includesAny(q, [
+    "coach",
+    "coaching",
+    "corner",
+    "game plan",
+    "gameplan",
+    "next session",
+    "next practice",
+    "next fight",
+    "fight camp",
+    "competition",
+    "opponent",
+    "match",
+    "bout",
+    "round",
+    "performance",
+    "warm up",
+    "jiu jitsu",
+    "bjj",
+    "grappling",
+    "kickboxing",
+    "muay thai",
+    "clinch",
+    "punch",
+    "kick",
+    "submission",
+    "body lock",
+    "what should i do next",
+    "what do i do next",
+    "what should i focus on",
+    "what matters today",
+    "what should i carry",
+    "what should i bring back",
+    "what did i do wrong",
+    "how do i fix this",
+  ]);
+}
+
+function wantsGeneralAssistantTask(q: string) {
+  return includesAny(q, [
+    "tell me a joke",
+    "write me a poem",
+    "write a poem",
+    "write me a story",
+    "write a story",
+    "debug this code",
+    "debug this function",
+    "javascript function",
+    "python script",
+    "capital of",
+    "recommend a movie",
+    "movie recommendation",
+    "solve my homework",
+    "write my essay",
+  ]);
+}
+
+function outOfScopeDecision() {
+  return [
+    "That falls outside Disciplin.",
+    "Disciplin prepares you for training, competition, recovery, and your next coaching conversation.",
+    "",
+    "Ask instead:",
+    "What should I carry into my next session?",
+    "How should recovery change today's work?",
+    "What should I take back to my coach?",
+  ].join("\n");
+}
+
 function classifySenseiIntent(message: string, section?: Section): ClassifiedIntent {
   const q = message.toLowerCase();
 
@@ -887,6 +958,16 @@ function classifySenseiIntent(message: string, section?: Section): ClassifiedInt
       route: "strictSystemNavigationDecision",
       confidence: "medium",
       reason: "The prompt asks how to move through the app instead of asking for coaching.",
+    };
+  }
+
+  if (wantsGeneralAssistantTask(q)) {
+    return {
+      category: "Out of Scope",
+      intent: "out_of_scope",
+      route: "outOfScopeDecision",
+      confidence: "high",
+      reason: "The request is a general-assistant task, not athlete preparation.",
     };
   }
 
@@ -999,6 +1080,17 @@ function classifySenseiIntent(message: string, section?: Section): ClassifiedInt
     hasWord(q, "counter") ||
     hasWord(q, "guard") ||
     hasWord(q, "stance") ||
+    hasWord(q, "grapple") ||
+    hasWord(q, "grappling") ||
+    hasWord(q, "bjj") ||
+    hasWord(q, "clinch") ||
+    hasWord(q, "punch") ||
+    hasWord(q, "kick") ||
+    hasWord(q, "submission") ||
+    hasWord(q, "sweep") ||
+    q.includes("jiu jitsu") ||
+    q.includes("kickboxing") ||
+    q.includes("muay thai") ||
     q.includes("what should i train")
   ) {
     return {
@@ -1017,6 +1109,16 @@ function classifySenseiIntent(message: string, section?: Section): ClassifiedInt
       route: "overviewDecision",
       confidence: "medium",
       reason: "The prompt is scoped to overview.",
+    };
+  }
+
+  if (!wantsPerformanceContext(q)) {
+    return {
+      category: "Out of Scope",
+      intent: "out_of_scope",
+      route: "outOfScopeDecision",
+      confidence: "high",
+      reason: "The request does not prepare the athlete for training, competition, recovery, coaching, or performance.",
     };
   }
 
@@ -1261,6 +1363,10 @@ function updateSenseiMemory(args: {
   progress: DirectiveProgress;
   operatingDecision: SenseiOperatingDecision;
 }) {
+  if (args.intent === "out_of_scope") {
+    return cloneSenseiMemory(args.memory);
+  }
+
   const now = new Date().toISOString();
   const next = cloneSenseiMemory(args.memory);
   const q = args.message.toLowerCase();
@@ -1370,7 +1476,7 @@ function updateSenseiMemory(args: {
   if (includesAny(q, ["fight", "camp", "opponent", "weight cut", "weigh", "days out"])) {
     rememberMemoryItem({
       memory: next,
-            bucket: "fightCampConcerns",
+      bucket: "fightCampConcerns",
       label: "Camp pressure changes decision quality",
       question,
       now,
@@ -2055,6 +2161,7 @@ function buildPendingPsychologyAnswer(args: {
       pickLine(seed + "d", ["Again.", "Position first.", styleReturnLine(args.connected)])
     );
   }
+
   if (topic === "urgency") {
     return pressureCommand(
       pickLine(seed, ["Good.", "There it is.", "That tells me enough."]),
@@ -2285,7 +2392,7 @@ function inferTacticalConcept(message: string): TacticalConcept {
       "landed the shot",
       "but it felt wrong",
       "but sloppy",
-            "ugly",
+      "ugly",
       "bad rep",
     ])
   ) {
@@ -2515,7 +2622,7 @@ function buildPressureLeakAnswer(args: {
       return pressureCommand(
         "You got tired. The standard moved.",
         "Did fatigue make ugly work acceptable?",
-                "Do not leave."
+        "Do not leave."
       );
     }
 
@@ -2741,7 +2848,7 @@ function inferPressureCase(message: string): PressureCase {
       "anxious",
       "panic",
       "panicked",
-            "composure",
+      "composure",
       "lose composure",
       "lost composure",
       "calm down",
@@ -3006,8 +3113,8 @@ function buildGymWhy(args: {
 
   const opening =
     wantsWrestling || goal
-      ? `${USER_NAME}, you want ${goal || "competitive wrestling"}.`
-      : `${USER_NAME}, this is the honest call.`;
+      ? `You want ${goal || "competitive wrestling"}.`
+      : "This is the honest call.";
 
   const flaw = activeCorrection
     ? `Your current break is ${activeCorrection}.`
@@ -3071,7 +3178,7 @@ function buildGymDecision(args: {
   });
 
   return formatAnswer({
-    decision: `${USER_NAME}, pick ${name}.`,
+    decision: `Pick ${name}.`,
     why: [why, location ? `Address: ${location}.` : ""]
       .filter(Boolean)
       .join(" "),
@@ -3148,7 +3255,8 @@ function strictFuelDecision(args: {
     "heavy",
     "sluggish",
   ]);
-    if (isPreTraining && isGreasy) {
+
+  if (isPreTraining && isGreasy) {
     return formatAnswer({
       decision: "Do not take greasy fuel into wrestling.",
       why:
@@ -4111,7 +4219,8 @@ function strictPressureDisciplineDecision(args: {
         args.progress.proofType === "metrics"),
     underResistance: args.progress.underResistance,
   });
-    answer = pressureCommand(
+
+  answer = pressureCommand(
     campContext,
     "Do not take the mental exchange.",
     "Break eye contact.",
@@ -4179,7 +4288,7 @@ Voice:
 - disciplined
 - practical
 - slightly cold
-- use the user's name once if needed: ${USER_NAME}
+- do not invent or infer the user's name
 - do not repeat the user's name
 
 Forbidden phrases:
@@ -4695,6 +4804,7 @@ function pressureCampLine(args: {
   const camp = label ? `${label}. ` : "";
   return `${camp}Stay on ${args.directive}. ${actionLine(args.operating.action)} ${args.operatingLimit}. ${args.go}.`;
 }
+
 function buildOperatingDecision(args: {
   connected: SenseiConnected;
   activeCorrection: string;
@@ -4985,21 +5095,85 @@ async function runAi(args: {
 }
 
 export async function POST(req: NextRequest) {
+  const id = requestId(req);
+  let lease: Extract<RateLimitLease, { ok: true }> | null = null;
   try {
+    const supabase = await createSupabaseServerClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return unauthorized();
+    }
+    const acquired = acquireExpensiveRequest({
+      route: "sensei",
+      userId: user.id,
+      ip: requestIp(req),
+    });
+    if (!acquired.ok) return rateLimited(acquired);
+    lease = acquired;
     const body = await req.json().catch(() => null);
 
     const message = cleanText(body?.message || body?.question);
     const section = cleanText(body?.section) as Section;
-    const connected = normalizeConnected(buildContextInput(body || {}));
+    const connectedInput = normalizeConnected(buildContextInput(body || {}));
+    const { data: currentPointer, error: currentError } = await supabase
+      .from("current_coach_missions")
+      .select("mission_version_id, relationship_id")
+      .eq("athlete_user_id", user.id)
+      .maybeSingle();
+    if (currentError) {
+      logServerError("sensei-authority-read", id, currentError);
+      return safeServerError(id);
+    }
+    const { data: activeRelationship, error: relationshipError } = currentPointer
+      ? await supabase
+          .from("coach_relationships")
+          .select("status, coach_user_id")
+          .eq("id", currentPointer.relationship_id)
+          .eq("athlete_user_id", user.id)
+          .maybeSingle()
+      : { data: null, error: null };
+    if (relationshipError) {
+      logServerError("sensei-relationship-read", id, relationshipError);
+      return safeServerError(id);
+    }
+    const { data: approvedMission, error: missionError } =
+      currentPointer &&
+      activeRelationship?.status === "connected" &&
+      activeRelationship.coach_user_id
+      ? await supabase
+          .from("mission_versions")
+          .select("correction_text, practice_task")
+          .eq("id", currentPointer.mission_version_id)
+          .eq("athlete_user_id", user.id)
+          .eq("relationship_id", currentPointer.relationship_id)
+          .maybeSingle()
+      : { data: null, error: null };
+    if (missionError) {
+      logServerError("sensei-mission-read", id, missionError);
+      return safeServerError(id);
+    }
+    const serverCorrection = cleanText(approvedMission?.correction_text);
+    const connected = normalizeConnected({
+      ...connectedInput,
+      vision: {
+        ...connectedInput.vision,
+        present: Boolean(serverCorrection),
+        correction: serverCorrection || null,
+        fix_next_rep: cleanText(approvedMission?.practice_task) || null,
+      },
+      camp: {
+        ...connectedInput.camp,
+        currentCorrectionLock: serverCorrection || null,
+      },
+    });
     const session = normalizeSession(body?.session || {});
     const progress = normalizeDirectiveProgress(
       body?.directiveProgress || undefined
     );
 
-    const activeCorrection =
-      cleanText(body?.activeDirective) ||
-      cleanText(connected.camp?.currentCorrectionLock) ||
-      cleanText(connected.vision?.correction);
+    // Authority is resolved from the authenticated athlete's immutable current
+    // mission pointer. Client-supplied directives can never unlock Sensei.
+    const activeCorrection = serverCorrection;
 
     const fixNextRep = cleanText(connected.vision?.fix_next_rep);
     const pendingPsychologyAnswer =
@@ -5122,7 +5296,8 @@ export async function POST(req: NextRequest) {
         memory: senseiMemory,
       } satisfies SenseiResponse);
     }
-        if (intent === "gym_decision") {
+
+    if (intent === "gym_decision") {
       const answer = buildGymDecision({
         message,
         connected: connectedWithMemory,
@@ -5166,7 +5341,13 @@ export async function POST(req: NextRequest) {
     let detectedPressureLeak: PressureLeak | null = null;
     let nextPressureCard: PressureDisciplineCard = pressureCard;
 
-    if (
+    if (intent === "out_of_scope") {
+      answer = outOfScopeDecision();
+      lastCommand = "Bring it back to performance.";
+      lastWhy = classifiedIntent.reason;
+      mode = "STRICT";
+      responseMode = "Refusal";
+    } else if (
       !activeCorrection &&
       intent !== "fuel_decision" &&
       intent !== "weight_cut_decision" &&
@@ -5411,8 +5592,8 @@ export async function POST(req: NextRequest) {
       pressureCard: nextPressureCard,
       memory: senseiMemory,
     } satisfies SenseiResponse);
-  } catch (err: any) {
-    console.error("[sensei] route failed:", err);
+  } catch (err: unknown) {
+    logServerError("sensei", id, err);
 
     const fallbackProgress = normalizeDirectiveProgress();
     const pressureCard = buildPressureDisciplineCard({
@@ -5468,11 +5649,16 @@ export async function POST(req: NextRequest) {
       session: {
         lastDecision: "Sensei route failed.",
         lastCommand: "Check route logs.",
-        lastWhy: err?.message || "Unknown server error.",
+        lastWhy: "The request could not be completed.",
         lastUpdated: new Date().toISOString(),
       },
       directiveState: fallbackProgress,
       pressureCard,
     } satisfies SenseiResponse);
+  } finally {
+    lease?.release();
   }
 }
+
+
+

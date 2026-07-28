@@ -21,19 +21,19 @@ export default function Navbar() {
   const label = pageLabel(pathname);
 
   return (
-    <header className="fixed inset-x-0 top-0 z-50 border-b border-white/10 bg-[#020817]/85 backdrop-blur-xl">
-      <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-4">
+    <header className="app-nav-surface fixed inset-x-0 top-0 z-50 border-x-0 border-t-0 pt-[env(safe-area-inset-top)]">
+      <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-4 sm:px-5">
         <div className="flex min-w-0 items-center gap-3">
           <Link
             href="/dashboard"
-            className="shrink-0 text-[14px] font-semibold tracking-[0.32em] text-emerald-300"
+            className="app-brand shrink-0"
           >
             DISCIPLIN
           </Link>
 
-          <div className="h-5 w-px bg-white/10" />
+          <div className="hidden h-5 w-px bg-white/10 sm:block" />
 
-          <div className="truncate text-sm text-white/65">{label}</div>
+          <div className="hidden truncate text-sm font-medium text-white/58 sm:block">{label}</div>
         </div>
 
         <div className="hidden items-center gap-4 md:flex">
@@ -54,8 +54,8 @@ export default function Navbar() {
           <UserChip />
         </div>
 
-        <div className="flex items-center gap-3 md:hidden">
-          <UserChip />
+        <div className="flex items-center md:hidden">
+          <UserChip compact />
         </div>
       </div>
     </header>

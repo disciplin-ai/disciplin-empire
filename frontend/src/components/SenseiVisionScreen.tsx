@@ -2,13 +2,18 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Inter_Tight } from "next/font/google";
 import type { VisionAnalysis, VisionFinding } from "@/lib/senseiVisionTypes";
+import type { VisionReviewPackage } from "@/lib/visionGovernance";
 
 type VisionBuildStage =
   | "IDLE"
   | "UPLOADING_FRAME"
+  | "FRAME_LOCKED"
   | "READING_FRAME"
+  | "SKELETON_DETECTED"
+  | "CORRECTION_FOUND"
+  | "BREAK_POINT_IDENTIFIED"
+  | "MISSION_UPDATED"
   | "BUILDING_CORRECTION"
   | "DONE"
   | "ERROR";
@@ -21,6 +26,7 @@ type VisionChatMessage = {
 };
 
 type Props = {
+  embedded?: boolean;
   sport: string;
   setSport: (value: string) => void;
   clipLabel: string;
@@ -37,7 +43,7 @@ type Props = {
   buildStage: VisionBuildStage;
   error: string | null;
   analysis: VisionAnalysis | null;
-  visionHistory: VisionAnalysis[];
+  reviewPackage: VisionReviewPackage | null;
   chatInput: string;
   setChatInput: (value: string) => void;
   chatSending: boolean;
@@ -50,20 +56,34 @@ type Props = {
 
 type Tone = "good" | "warn" | "bad" | "neutral";
 
-const interTight = Inter_Tight({
-  subsets: ["latin"],
-  weight: ["500", "600", "700", "800", "900"],
-});
-
 const spring = {
-  type: "spring",
-  stiffness: 340,
-  damping: 30,
-  mass: 0.78,
+  type: "tween",
+  duration: 0.22,
+  ease: [0.22, 1, 0.36, 1],
 } as const;
 
+const resultReveal = {
+  hidden: {},
+  visible: {
+    transition: {
+      staggerChildren: 0.12,
+      delayChildren: 0.06,
+    },
+  },
+};
+
+const resultItem = {
+  hidden: { opacity: 0, y: 14, scale: 0.992 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    transition: spring,
+  },
+};
+
 type SkeletonState = {
-  status: "detected" | "failed" | "unknown";
+  status: "Waiting" | "Clear" | "Limited";
   label: string;
   detail: string;
   tone: Tone;
@@ -75,56 +95,50 @@ type VisionSystemStep = {
 };
 
 const VISION_SYSTEM_STEPS = [
-  "FRAME RECEIVED",
-  "READING FRAME",
-  "LANDMARKS DETECTED",
-  "PRIMARY MISTAKE EXTRACTED",
-  "CORRECTION READY",
-  "CORRECTION LOCKED",
+  "EVIDENCE READY",
+  "VISIBLE DETAILS",
+  "OBSERVATION",
+  "LIMITS",
+  "REVIEW READY",
 ];
 
 function visionStepIndex({
   previewUrl,
   running,
   buildStage,
-  finding,
+  complete,
 }: {
   previewUrl: string | null;
   running: boolean;
   buildStage: VisionBuildStage;
-  finding: VisionFinding | null;
+  complete: boolean;
 }) {
-  if (finding) return 5;
+  if (complete) return 4;
   if (!previewUrl) return -1;
   if (!running) return 0;
 
   const raw = String(buildStage || "IDLE").toUpperCase();
 
-  if (raw.includes("UPLOAD")) return 1;
-  if (raw.includes("READ")) return 2;
-  if (raw.includes("BUILD")) return 4;
+  if (raw.includes("UPLOAD") || raw.includes("FRAME_LOCKED")) return 0;
+  if (raw.includes("READ") || raw.includes("SKELETON")) return 1;
+  if (raw.includes("CORRECTION") || raw.includes("BUILD")) return 2;
+  if (raw.includes("BREAK")) return 3;
+  if (raw.includes("MISSION")) return 4;
 
-  return 1;
+  return 0;
 }
 
 function visionSystemLog({
   activeIndex,
-  posePreview,
 }: {
   activeIndex: number;
-  posePreview: any | null;
 }): VisionSystemStep[] {
   if (activeIndex < 0) return [];
 
   return VISION_SYSTEM_STEPS.slice(0, activeIndex + 1).map((label, index) => {
-    const landmarkLabel =
-      label === "LANDMARKS DETECTED" && posePreview?.landmarkCount
-        ? `${posePreview.landmarkCount} LANDMARKS DETECTED`
-        : label;
-
     return {
-      label: landmarkLabel,
-      tone: index === 5 ? "good" : index === activeIndex ? "warn" : "neutral",
+      label,
+      tone: index === 4 ? "good" : index === activeIndex ? "warn" : "neutral",
     };
   });
 }
@@ -262,38 +276,33 @@ function getSkeletonState(messages: VisionChatMessage[]): SkeletonState {
     .map((m) => clean(m.text))
     .find(
       (text) =>
-        text.toLowerCase().includes("skeleton detected") ||
-        text.toLowerCase().includes("no clear skeleton") ||
-        text.toLowerCase().includes("skeleton tracking failed")
+        text.toLowerCase().includes("body position is clear") ||
+        text.toLowerCase().includes("body position is unclear") ||
+        text.toLowerCase().includes("body position could not be read")
     );
 
   if (!latest) {
     return {
-      status: "unknown",
-      label: "Not checked",
-      detail: "Run Vision to see whether skeletal tracking can read this frame.",
+      status: "Waiting",
+      label: "Not reviewed",
+      detail: "Run Vision to review the visible body position.",
       tone: "neutral",
     };
   }
 
-  if (latest.toLowerCase().includes("skeleton detected")) {
-    const match = latest.match(/(\d+)\s+landmarks/i);
-
+  if (latest.toLowerCase().includes("body position is clear")) {
     return {
-      status: "detected",
-      label: "Body position read",
-      detail: match
-        ? `${match[1]} landmarks mapped. Use skeleton evidence as support.`
-        : "Vision found enough body points to support the correction.",
+      status: "Clear",
+      label: "Position visible",
+      detail: "The image is clear enough to support an observation.",
       tone: "good",
     };
   }
 
   return {
-    status: "failed",
-    label: "Image-only analysis",
-    detail:
-      "Body tracking was unclear. The correction is based on the visible frame.",
+    status: "Limited",
+    label: "Limited view",
+    detail: "Vision will rely only on what is clearly visible.",
     tone: "warn",
   };
 }
@@ -336,11 +345,11 @@ function Surface({
   return (
     <motion.section
       layout
-      initial={{ opacity: 0, y: 16, scale: 0.985, filter: "blur(8px)" }}
-      animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
+      initial={{ opacity: 0, y: 8, scale: 0.992 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={spring}
       className={cn(
-        "rounded-[2rem] bg-[#101a28]/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_24px_70px_rgba(0,0,0,0.28)] ring-1 backdrop-blur-2xl",
+        "rounded-[22px] bg-[#101a28]/76 shadow-[inset_0_1px_0_rgba(255,255,255,0.055),0_20px_60px_rgba(0,0,0,0.24)] ring-1 backdrop-blur-xl",
         tone === "good" && "ring-emerald-300/14",
         tone === "warn" && "ring-amber-300/16",
         tone === "bad" && "ring-rose-300/16",
@@ -402,18 +411,17 @@ function VisionEngineCard({
 }) {
   const stage = String(buildStage || "IDLE").toUpperCase();
   const stageState = stage.includes("UPLOAD")
-    ? { activeIndex: 0, target: 24, status: "Securing frame" }
+    ? { activeIndex: 0, target: 24, status: "Preparing evidence" }
     : stage.includes("READ") && landmarkCount > 0
-      ? { activeIndex: 2, target: 72, status: `${landmarkCount} landmarks found` }
+      ? { activeIndex: 2, target: 72, status: "Visible position found" }
       : stage.includes("READ")
-        ? { activeIndex: 1, target: 52, status: "Reading body position" }
+        ? { activeIndex: 1, target: 52, status: "Reviewing position" }
         : stage.includes("BUILD")
-          ? { activeIndex: 3, target: 94, status: "Locking correction" }
+          ? { activeIndex: 3, target: 94, status: "Separating observation" }
           : stage === "DONE"
-            ? { activeIndex: 4, target: 100, status: "Correction locked" }
-            : { activeIndex: 0, target: 8, status: "Standing by" };
+            ? { activeIndex: 4, target: 100, status: "Review ready" }
+            : { activeIndex: 0, target: 8, status: "Ready" };
   const [displayProgress, setDisplayProgress] = useState(0);
-  const [displayLandmarks, setDisplayLandmarks] = useState(0);
 
   useEffect(() => {
     if (!running && stage === "IDLE") {
@@ -435,38 +443,24 @@ function VisionEngineCard({
     return () => window.clearInterval(timer);
   }, [running, stage, stageState.target]);
 
-  useEffect(() => {
-    if (!landmarkCount) {
-      setDisplayLandmarks(0);
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      setDisplayLandmarks((current) =>
-        current >= landmarkCount ? current : Math.min(landmarkCount, current + 2)
-      );
-    }, 45);
-
-    return () => window.clearInterval(timer);
-  }, [landmarkCount]);
-
   const steps = [
-    { key: "UPLOAD", label: "Upload" },
-    { key: "READ", label: "Read" },
+    { key: "UPLOAD", label: "Evidence" },
+    { key: "READ", label: "Review" },
     { key: "MAP", label: "Position" },
-    { key: "BUILD", label: "Correction" },
+    { key: "BUILD", label: "Limits" },
   ];
   const activeIndex = stageState.activeIndex;
 
   return (
     <Surface className="p-5">
       <SectionTitle
-        eyebrow="Frame Read"
-        title="Reading the position"
-        subtitle="Reading the frame and building one correction."
+        eyebrow="Evidence review"
+        title="Reviewing the position"
+        subtitle="Separating what is visible from what remains uncertain."
         right={<Badge label={running ? "Active" : "Ready"} tone={running ? "warn" : "good"} />}
       />
-            <div className="mt-5">
+
+      <div className="mt-5">
         <div className="flex items-center justify-between gap-4">
           <AnimatePresence mode="wait">
             <motion.p
@@ -488,7 +482,7 @@ function VisionEngineCard({
           <motion.div
             className="absolute inset-y-0 left-0 rounded-full bg-emerald-300 shadow-[0_0_18px_rgba(52,211,153,0.55)]"
             animate={{ width: `${displayProgress}%` }}
-            transition={{ type: "spring", stiffness: 120, damping: 22 }}
+            transition={{ type: "tween", duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
           />
           {running && (
             <motion.div
@@ -545,10 +539,10 @@ function VisionEngineCard({
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
-              Body Position Check
+              Visible position
             </p>
             <p className="mt-2 text-sm font-semibold text-white">
-              {landmarkCount > 0 ? `${displayLandmarks} landmarks mapped` : skeleton.label}
+              {skeleton.label}
             </p>
             <p className="mt-1 text-xs leading-6 text-white/45">{skeleton.detail}</p>
           </div>
@@ -580,7 +574,7 @@ function FrameScanner({
     <div
       className={cn(
         "relative overflow-hidden rounded-[1.75rem] bg-[#07111f]/84 shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_18px_45px_rgba(0,0,0,0.2)] ring-1 ring-sky-200/[0.09]",
-        compact ? "min-h-[260px]" : "min-h-[440px]"
+        compact ? "min-h-[188px]" : "min-h-[440px]"
       )}
     >
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(125,211,252,0.06)_1px,transparent_1px),linear-gradient(90deg,rgba(125,211,252,0.06)_1px,transparent_1px)] bg-[size:28px_28px]" />
@@ -656,119 +650,76 @@ function FrameScanner({
       )}
 
       <div className="absolute left-4 top-4 z-30 flex flex-wrap items-center gap-2">
-        <Badge
-          label={
-            systemState ||
-            (running ? "Reading frame" : previewUrl ? "Frame received" : "Awaiting frame")
-          }
-          tone={locked ? "good" : running ? "warn" : previewUrl ? "good" : "neutral"}
-        />
+        {(systemState || running || previewUrl) && (
+          <Badge
+            label={systemState || (running ? "Reviewing evidence" : "Evidence ready")}
+            tone={locked ? "good" : running ? "warn" : "good"}
+          />
+        )}
         {selectedFileName && <Badge label="Evidence" tone="neutral" />}
       </div>
 
-      <div className="absolute bottom-4 left-4 right-4 z-30 flex items-end justify-between gap-4 rounded-[1.2rem] bg-[#020714]/72 px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-sky-200/[0.07] backdrop-blur-xl">
+      {previewUrl && (
+        <div className="absolute bottom-4 left-4 right-4 z-30 flex items-end justify-between gap-4 rounded-[1.2rem] bg-[#020714]/72 px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-sky-200/[0.07] backdrop-blur-xl">
         <div className="min-w-0">
           <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-100/45">
-            Disciplin Vision Scanner
+            Vision evidence
           </p>
           <p className="mt-1 truncate text-sm font-semibold text-white/82">
-            {selectedFileName || "No frame loaded"}
+            {selectedFileName}
           </p>
         </div>
 
         <p className="shrink-0 text-[10px] font-semibold tracking-[0.12em] text-emerald-200/55">
-          {locked ? "LOCKED" : previewUrl ? "LOCK 01" : "STANDBY"}
+          {locked ? "REVIEWED" : "READY"}
         </p>
-      </div>
+        </div>
+      )}
 
       {previewUrl ? (
-        <motion.img
-          key={previewUrl}
-          src={previewUrl}
-          alt="Frame preview"
-          initial={{ opacity: 0, scale: 1.015 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.35, ease: "easeOut" }}
-          className={cn(
-            "relative z-10 h-full w-full object-contain p-3",
-            compact ? "max-h-[320px]" : "max-h-[620px]"
-          )}
-        />
+        /\.(mp4|mov|m4v|webm|ogg)$/i.test(selectedFileName) ? (
+          <motion.video
+            key={previewUrl}
+            src={previewUrl}
+            controls
+            playsInline
+            initial={{ opacity: 0, scale: 1.015 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.35, ease: "easeOut" }}
+            className={cn(
+              "relative z-10 h-full w-full object-contain p-3",
+              compact ? "max-h-[240px]" : "max-h-[620px]"
+            )}
+          />
+        ) : (
+          <motion.img
+            key={previewUrl}
+            src={previewUrl}
+            alt="Evidence preview"
+            initial={{ opacity: 0, scale: 1.015 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.35, ease: "easeOut" }}
+            className={cn(
+              "relative z-10 h-full w-full object-contain p-3",
+              compact ? "max-h-[240px]" : "max-h-[620px]"
+            )}
+          />
+        )
       ) : (
         <div className="relative z-10 flex min-h-[inherit] items-center justify-center px-8 pb-24 pt-16 text-center">
           <div className="max-w-sm">
-          <motion.div
-              className="mx-auto h-20 w-20 rounded-[1.6rem] bg-sky-300/[0.045] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_60px_rgba(125,211,252,0.13)] ring-1 ring-sky-300/15"
-              animate={{ scale: [1, 1.06, 1], opacity: [0.58, 1, 0.58] }}
-              transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
-            />
+            <div className="mx-auto h-16 w-16 rounded-[1.35rem] bg-white/[0.035] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/10" />
             <p className="mt-5 text-sm font-semibold uppercase tracking-[0.12em] text-white/72">
-              Insert frame
+              Choose media
             </p>
             <p className="mt-2 text-xs leading-6 text-white/46">
-              Load a still or video. Vision extracts the frame and locks the evidence.
+          Add a still image to preview it before review.
             </p>
           </div>
         </div>
       )}
     </div>
   );
-}
-async function extractFrameFromVideo(file: File): Promise<File> {
-  return new Promise((resolve, reject) => {
-    const video = document.createElement("video");
-    const canvas = document.createElement("canvas");
-    const url = URL.createObjectURL(file);
-
-    video.preload = "metadata";
-    video.muted = true;
-    video.playsInline = true;
-    video.src = url;
-
-    video.onloadedmetadata = () => {
-      video.currentTime = Math.min(1.5, video.duration / 2);
-    };
-
-    video.onseeked = () => {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        URL.revokeObjectURL(url);
-        reject(new Error("Could not read video frame."));
-        return;
-      }
-
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      canvas.toBlob(
-        (blob) => {
-          URL.revokeObjectURL(url);
-
-          if (!blob) {
-            reject(new Error("Could not extract frame."));
-            return;
-          }
-
-          resolve(
-            new File(
-              [blob],
-              file.name.replace(/\.[^.]+$/, "") + "-frame.jpg",
-              { type: "image/jpeg" }
-            )
-          );
-        },
-        "image/jpeg",
-        0.92
-      );
-    };
-
-    video.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Video could not be loaded."));
-    };
-  });
 }
 function UploadPanel({
   sport,
@@ -785,7 +736,6 @@ function UploadPanel({
   onReset,
   running,
   error,
-  systemState,
   correctionLocked,
 }: {
   sport: string;
@@ -802,7 +752,6 @@ function UploadPanel({
   onReset: () => void;
   running: boolean;
   error: string | null;
-  systemState?: string;
   correctionLocked?: boolean;
 }) {
   const sports = [
@@ -816,21 +765,6 @@ function UploadPanel({
     "Sambo",
   ];
 async function handleUploadFile(file: File | null) {
-  if (!file) {
-    onFileChange(null);
-    return;
-  }
-
-  if (file.type.startsWith("video/")) {
-    try {
-      const frameFile = await extractFrameFromVideo(file);
-      onFileChange(frameFile);
-    } catch {
-      onFileChange(null);
-    }
-    return;
-  }
-
   onFileChange(file);
 }
   return (
@@ -845,27 +779,28 @@ async function handleUploadFile(file: File | null) {
       "
       tone="neutral"
     >
-      <div className="p-5 pb-0 sm:p-6 sm:pb-0">
+      <div className="p-5 pb-0">
         <SectionTitle
-          eyebrow="Mission Analysis"
-          title="Sensei Vision"
-          subtitle="Lock one frame. Read the break. Build the next rep."
+          eyebrow="Vision"
+          title={correctionLocked ? "Review ready" : "Review evidence"}
+          subtitle={
+            correctionLocked
+              ? "Observation, interpretation, and limits are separated."
+              : "Load media. Vision will show what the evidence supports."
+          }
           right={
-            <Badge
-              label={running ? "Analyzing" : "Ready"}
-              tone={running ? "warn" : "good"}
-            />
+            running ? <Badge label="Analysing" tone="warn" /> : undefined
           }
         />
       </div>
 
-      <div className="flex flex-col gap-6 p-5 sm:p-6">
-        <div className="order-2 lg:order-1">
+      <div className="flex flex-col gap-4 p-5">
+        <div className="order-2">
           <label className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
             Sport
           </label>
 
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-2">
             {sports.map((item) => (
               <button
                 key={item}
@@ -884,72 +819,80 @@ async function handleUploadFile(file: File | null) {
           </div>
         </div>
 
-        <div className="order-3 lg:order-2">
-          <label className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
-            Clip Label
-          </label>
+        <details className="group order-3 rounded-[1.2rem] bg-white/[0.035] ring-1 ring-white/[0.07]">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-semibold text-white/62">
+            <span>Your context</span>
+            <span className="text-[10px] uppercase tracking-[0.12em] text-white/30 group-open:hidden">
+              {notes || clipLabel.trim() ? "Added" : "Optional"}
+            </span>
+            <span className="hidden text-white/35 group-open:inline">Close</span>
+          </summary>
 
-          <input
-            value={clipLabel}
-            onChange={(e) => setClipLabel(e.target.value)}
-            className="mt-2 w-full rounded-[1.2rem] bg-black/24 px-4 py-3 text-sm text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] outline-none ring-1 ring-white/[0.08] placeholder:text-white/22 focus:ring-emerald-300/24"
-            placeholder="Frame upload"
-          />
-        </div>
+          <div className="space-y-4 border-t border-white/[0.06] p-4">
+            <div>
+              <label className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
+                Session label
+              </label>
+              <input
+                value={clipLabel}
+                onChange={(e) => setClipLabel(e.target.value)}
+                className="mt-2 w-full rounded-[1rem] bg-black/24 px-4 py-3 text-sm text-white outline-none ring-1 ring-white/[0.08] placeholder:text-white/22 focus:ring-emerald-300/24"
+                placeholder="Round 2, 01:14"
+              />
+            </div>
 
-        <div className="order-4 lg:order-3">
-          <label className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
-            Context
-          </label>
+            <div>
+              <label className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
+                What were you trying to do?
+              </label>
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={3}
+                className="mt-2 w-full resize-none rounded-[1rem] bg-black/24 px-4 py-3 text-sm leading-6 text-white outline-none ring-1 ring-white/[0.08] placeholder:text-white/22 focus:ring-emerald-300/24"
+                placeholder="Add the position, setup, or problem."
+              />
+            </div>
+          </div>
+        </details>
 
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={4}
-            className="mt-2 w-full resize-none rounded-[1.2rem] bg-black/24 px-4 py-3 text-sm leading-7 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] outline-none ring-1 ring-white/[0.08] placeholder:text-white/22 focus:ring-emerald-300/24"
-            placeholder="Tell Vision what you were trying to do."
-          />
-        </div>
-
-        <div className="order-1 lg:order-4">
+        <div className="order-1">
           <div className="flex items-center justify-between gap-3">
             <label className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
-              Frame Scanner
+              Evidence
             </label>
             {posePreview?.landmarkCount ? (
-              <Badge label={`${posePreview.landmarkCount} landmarks`} tone="good" />
+              <Badge label="Position found" tone="good" />
             ) : (
-              <Badge label="Image/video" tone="neutral" />
+              <Badge label="Image" tone="neutral" />
             )}
           </div>
 
-          <label className="mt-2 block cursor-pointer">
-            <FrameScanner
-              previewUrl={previewUrl}
-              selectedFileName={selectedFileName}
-              running={running}
-              systemState={systemState}
-              locked={correctionLocked}
-              compact
-            />
-
+          <label className="mt-2 block cursor-pointer rounded-[1.1rem] bg-sky-300/[0.045] p-3 ring-1 ring-sky-300/10 transition hover:bg-sky-300/[0.07] hover:ring-sky-200/20">
             <input
               type="file"
-              accept="image/*,video/mp4,video/webm,video/quicktime"
+              accept="image/jpeg,image/png,image/webp"
               className="hidden"
               disabled={running}
               onChange={(e) => handleUploadFile(e.target.files?.[0] || null)}
 />
+            <div className="grid grid-cols-[40px_1fr_auto] items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-300/[0.07] text-lg text-sky-100/60 ring-1 ring-sky-200/10">
+                +
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-bold text-white/78">
+                  {selectedFileName || "Choose media"}
+                </p>
+                <p className="mt-0.5 text-[11px] text-white/35">
+                  {selectedFileName ? "Tap to replace" : "JPEG, PNG, or WebP · 10 MB max"}
+                </p>
+              </div>
+              <span className="rounded-full bg-emerald-500/12 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-100 ring-1 ring-emerald-300/24">
+                {selectedFileName ? "Replace" : "Load"}
+              </span>
+            </div>
           </label>
-
-          <div className="mt-3 grid grid-cols-[1fr_auto] items-center gap-3 rounded-[1.2rem] bg-sky-300/[0.045] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.045)] ring-1 ring-sky-300/10">
-            <p className="min-w-0 truncate text-xs leading-5 text-white/48">
-              {selectedFileName || "Tap scanner to load a frame or short clip."}
-            </p>
-            <span className="rounded-full bg-emerald-500/12 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-100 ring-1 ring-emerald-300/24">
-              Load
-            </span>
-          </div>
         </div>
 
         {error && (
@@ -962,10 +905,10 @@ async function handleUploadFile(file: File | null) {
           <button
             type="button"
             onClick={onAnalyze}
-            disabled={running}
+            disabled={running || !previewUrl}
             className="rounded-full bg-emerald-400 px-4 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#03130d] shadow-[0_14px_34px_rgba(16,185,129,0.18)] transition hover:scale-[1.01] hover:bg-emerald-300 disabled:opacity-45"
           >
-            {running ? "Scanning..." : "Analyze Frame"}
+            {running ? "Reading..." : correctionLocked ? "Analyze again" : "Analyze frame"}
           </button>
 
           <button
@@ -976,6 +919,126 @@ async function handleUploadFile(file: File | null) {
           >
             Reset
           </button>
+        </div>
+      </div>
+    </Surface>
+  );
+}
+
+function VisionReviewResult({ reviewPackage, embedded = false }: { reviewPackage: VisionReviewPackage; embedded?: boolean }) {
+  const observation = reviewPackage.claims.find((claim) => claim.kind === "OBSERVATION");
+  const inference = reviewPackage.claims.find((claim) => claim.kind === "INFERENCE");
+  const alternative = reviewPackage.claims.find((claim) => claim.kind === "ALTERNATIVE");
+  const uncertainty = reviewPackage.claims.find((claim) => claim.kind === "UNCERTAINTY");
+  const timestamp =
+    observation?.provenance.timestampStart || observation?.provenance.frameReference;
+  const evidenceLabel = reviewPackage.evidenceAssessment.evidenceStrength
+    .toLowerCase()
+    .replace(/_/g, " ");
+
+  return (
+    <Surface className="overflow-hidden" tone="neutral">
+      <div className="p-6 sm:p-8 lg:p-10">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge label={evidenceLabel} tone="neutral" />
+          <Badge
+            label={reviewPackage.evidenceAssessment.adequacy
+              .toLowerCase()
+              .replace(/_/g, " ")}
+            tone={reviewPackage.evidenceAssessment.canInfer ? "good" : "warn"}
+          />
+          <Badge
+            label={
+              reviewPackage.evidenceAuthority === "COACH_APPROVED"
+                ? "Coach approved"
+                : reviewPackage.evidenceAuthority === "COACH_REVIEW_PENDING"
+                  ? "Coach review pending"
+                  : reviewPackage.evidenceAuthority === "ATHLETE_DIRECTED"
+                    ? "Athlete directed"
+                    : "Observation only"
+            }
+            tone={
+              reviewPackage.evidenceAuthority === "COACH_APPROVED"
+                ? "good"
+                : reviewPackage.evidenceAuthority === "COACH_REVIEW_PENDING"
+                  ? "warn"
+                  : "neutral"
+            }
+          />
+          {timestamp && <Badge label={timestamp} tone="neutral" />}
+        </div>
+
+        <p className="mt-7 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-100/48">
+          What Vision saw
+        </p>
+        <h1 className="mt-3 max-w-5xl text-[30px] font-semibold leading-[1.08] tracking-[-.035em] text-white sm:text-[38px] xl:text-[40px]">
+          {observation?.statement || "No clear observation from this evidence."}
+        </h1>
+        <p className="mt-4 text-xs font-semibold uppercase tracking-[0.12em] text-white/35">
+          Vision observation · {observation?.confidence || "LOW"} confidence
+        </p>
+
+        <div className="mt-8 grid gap-px overflow-hidden rounded-[1.25rem] bg-white/[0.06] lg:grid-cols-3" style={embedded ? { gridTemplateColumns: "minmax(0, 1fr)" } : undefined}>
+          <div className="bg-[#091321] p-5 sm:p-6">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-100/45">
+              Why it may matter
+            </p>
+            <p className="mt-3 text-sm font-semibold leading-6 text-white/72">
+              {inference?.statement || "This evidence does not show why it happened."}
+            </p>
+            <p className="mt-4 text-[10px] uppercase tracking-[0.12em] text-white/28">
+              Vision interpretation
+            </p>
+          </div>
+
+          <div className="bg-[#091321] p-5 sm:p-6">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-100/45">
+              What Vision cannot know
+            </p>
+            <p className="mt-3 text-sm font-semibold leading-6 text-amber-50/68">
+              {uncertainty?.statement || "Your coach decides the technical priority."}
+            </p>
+            <p className="mt-4 text-[10px] uppercase tracking-[0.12em] text-white/28">
+              Evidence limitation
+            </p>
+          </div>
+
+          <div className="bg-[#091321] p-5 sm:p-6">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/35">
+              What only the coach decides
+            </p>
+            <p className="mt-3 text-sm font-semibold leading-6 text-white/72">
+              Whether this observation changes the active correction, reaction, or next decision.
+            </p>
+            <p className="mt-4 text-[10px] uppercase tracking-[0.12em] text-white/28">
+              Coach decision · Not reviewed
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-px border-t border-white/[0.06] bg-white/[0.06] lg:grid-cols-2" style={embedded ? { gridTemplateColumns: "minmax(0, 1fr)" } : undefined}>
+        <div className="bg-[#07111f] p-6 sm:p-7">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/35">
+            Alternative explanation
+          </p>
+          <p className="mt-3 text-sm leading-6 text-white/58">
+            {alternative?.statement || "No clear alternative is visible."}
+          </p>
+        </div>
+
+        <div className="bg-[#07111f] p-6 sm:p-7">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/35">
+            Next step
+          </p>
+          <p className="mt-3 text-base font-extrabold leading-6 text-emerald-100/82">
+            Show this evidence to your coach.
+          </p>
+          {reviewPackage.evidenceAssessment.request && (
+            <p className="mt-3 text-sm leading-6 text-amber-100/65">
+              {reviewPackage.evidenceAssessment.request}
+            </p>
+          )}
         </div>
       </div>
     </Surface>
@@ -997,7 +1060,7 @@ function PrimaryCorrection({ finding }: { finding: VisionFinding }) {
     "Opening Lost": "Reaction disappeared",
     "No Opening Created": "Reaction never forced",
     "Finished Despite Flaw": "Finished without position",
-        "Opponent Trap": "He baited the shot",
+    "Opponent Trap": "He baited the shot",
   };
   const openingNeeded = clean(
     openingFinding.required_opening ||
@@ -1080,12 +1143,12 @@ function PrimaryCorrection({ finding }: { finding: VisionFinding }) {
 
             <motion.h1
               layout="position"
-              className="mt-3 max-w-5xl text-[38px] font-black uppercase leading-[1.04] text-white sm:text-[50px] xl:text-[62px]"
+              className="mt-3 max-w-5xl text-[30px] font-semibold uppercase leading-[1.06] tracking-[-.03em] text-white sm:text-[38px] xl:text-[40px]"
             >
               {rule}
             </motion.h1>
 
-            <div className="mt-7 grid max-w-5xl gap-6 border-t border-white/[0.07] pt-6 lg:grid-cols-[0.8fr_1.2fr]">
+            <div className="mt-6 grid max-w-5xl gap-6 border-t border-white/[0.07] pt-5 xl:grid-cols-[0.72fr_1.28fr]">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-100/45">
                   Coach command
@@ -1351,7 +1414,6 @@ function ProofGate({ finding }: { finding: VisionFinding }) {
         ? "Do not add speed or harder rounds until this holds."
         : "Keep building until the correction survives pressure.";
 
-
   return (
     <Surface className="p-6 sm:p-7" tone={locked ? "warn" : "good"}>
       <SectionTitle
@@ -1436,18 +1498,25 @@ function ChatPanel({
         "When do I attack?",
         "What do I drill today?",
       ];
-        return (
-    <Surface className="overflow-hidden">
-      <div className="p-5 pb-0">
-        <SectionTitle
-          eyebrow="Ask Coach"
-          title="One frame. One answer."
-          subtitle="Ask what to force, see, or do next."
-          right={<Badge label={chatSending ? "Answering" : "Frame locked"} />}
-        />
-      </div>
 
-      <div className="space-y-4 p-5">
+  return (
+    <Surface className="overflow-hidden">
+      <details className="group">
+        <summary className="cursor-pointer list-none p-5">
+          <SectionTitle
+            eyebrow="Follow-up"
+            title="Ask one question"
+            subtitle="Open only when the correction needs clarification."
+            right={
+              <Badge
+                label={chatSending ? "Answering" : "Open coach"}
+                tone={chatSending ? "warn" : "neutral"}
+              />
+            }
+          />
+        </summary>
+
+      <div className="space-y-4 border-t border-white/[0.06] p-5">
         <div className="grid gap-2 sm:grid-cols-2">
           {prompts.slice(0, 4).map((prompt) => (
             <motion.button
@@ -1537,7 +1606,7 @@ function ChatPanel({
                   "bg-amber-500/[0.07] text-amber-50/74 ring-amber-300/14"
               )}
             >
-              {coachCopy(msg.text)}
+              {msg.text}
             </motion.div>
           ))}
         </div>
@@ -1548,7 +1617,7 @@ function ChatPanel({
             onChange={(e) => setChatInput(e.target.value)}
             onKeyDown={onChatKeyDown}
             rows={3}
-            placeholder="Ask about the next rep..."
+            placeholder="Ask about the active evidence..."
             className="resize-none rounded-[1.35rem] bg-black/24 px-4 py-3 text-sm leading-6 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.045)] outline-none ring-1 ring-white/[0.08] placeholder:text-white/24 focus:ring-emerald-300/24"
           />
 
@@ -1562,14 +1631,15 @@ function ChatPanel({
           </button>
         </div>
       </div>
+      </details>
     </Surface>
   );
 }
 
-function EmptyState() {
+function EmptyState({ embedded = false }: { embedded?: boolean }) {
   return (
-    <Surface className="min-h-[520px] overflow-hidden p-4 sm:p-6">
-      <div className="grid min-h-[480px] gap-5 lg:grid-cols-[minmax(0,1.08fr)_360px]">
+    <Surface className={cn(embedded ? "min-h-[360px]" : "min-h-[520px]", "overflow-hidden p-4 sm:p-6")}>
+      <div className={cn("grid gap-5 lg:grid-cols-[minmax(0,1.08fr)_360px]", embedded ? "min-h-[320px]" : "min-h-[480px]")} style={embedded ? { gridTemplateColumns: "minmax(0, 1fr)" } : undefined}>
         <FrameScanner
           previewUrl={null}
           selectedFileName=""
@@ -1578,22 +1648,14 @@ function EmptyState() {
 
         <div className="flex flex-col justify-between rounded-[1.75rem] bg-white/[0.035] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.055),0_16px_40px_rgba(0,0,0,0.16)] ring-1 ring-white/[0.07]">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-100/35">
-              No active frame
-            </p>
-
-            <h1 className="mt-4 text-3xl font-black tracking-tight text-white/84 sm:text-4xl">
-              Load the position you want to fix.
+            <h1 className="text-3xl font-semibold tracking-[-.03em] text-white/84 sm:text-4xl">
+              Choose a moment to review.
             </h1>
 
             <p className="mt-4 text-sm leading-7 text-white/48">
-              You will get one mistake, the reaction you missed, and the next rep.
+              Vision separates what is visible from what must remain uncertain.
             </p>
           </div>
-
-          <p className="mt-8 text-xs font-semibold uppercase tracking-[0.14em] text-emerald-100/45">
-            Frame first. One correction.
-          </p>
         </div>
       </div>
     </Surface>
@@ -1615,10 +1677,10 @@ function ArmedFrameState({
     <Surface className="overflow-hidden p-0">
       <div className="border-b border-sky-200/[0.08] bg-black/20 px-5 py-4">
         <SectionTitle
-          eyebrow="Frame Armed"
-          title="Ready for analysis"
-          subtitle="The frame is locked. Run Vision to identify the one mistake that changes the next rep."
-          right={<Badge label="Awaiting scan" tone="warn" />}
+          eyebrow="Evidence ready"
+          title="Ready to review"
+          subtitle="Run Vision to separate what is visible from what remains uncertain."
+          right={<Badge label="Ready" tone="warn" />}
         />
       </div>
 
@@ -1645,29 +1707,57 @@ function LoadingState({
 
   const stage = raw.includes("UPLOAD")
     ? {
-        eyebrow: "Frame intake",
-        title: "Securing the frame.",
-        detail: "Locking the image before analysis starts.",
-        pct: 20,
+        eyebrow: "Evidence",
+        title: "Preparing your image.",
+        detail: "Keeping this moment clear for review.",
+        pct: 10,
+      }
+    : raw.includes("FRAME_LOCKED")
+    ? {
+        eyebrow: "Evidence",
+        title: "Image ready.",
+        detail: "Reviewing what is visible.",
+        pct: 22,
       }
     : raw.includes("READ")
     ? {
-        eyebrow: "Body read",
-        title: "Reading stance and posture.",
-        detail: "Checking head line, hips, base, and visible body position.",
-        pct: 45,
+        eyebrow: "Observation",
+        title: "Reviewing the position.",
+        detail: "Looking at stance, posture, and visible movement.",
+        pct: 38,
       }
-    : raw.includes("BUILD")
+    : raw.includes("SKELETON")
     ? {
-        eyebrow: "Correction build",
-        title: "Finding the break point.",
-        detail: "Turning the frame into one correction you can train.",
-        pct: 82,
+        eyebrow: "Observation",
+        title: "Reviewing the position.",
+        detail: "Looking only at details visible in the image.",
+        pct: 52,
+      }
+    : raw.includes("CORRECTION") || raw.includes("BUILD")
+    ? {
+        eyebrow: "Observation",
+        title: "Separating evidence from interpretation.",
+        detail: "Keeping conclusions within what the image supports.",
+        pct: 68,
+      }
+    : raw.includes("BREAK")
+    ? {
+        eyebrow: "Limits",
+        title: "Marking what remains uncertain.",
+        detail: "The evidence cannot establish intent or your coach’s priority.",
+        pct: 84,
+      }
+    : raw.includes("MISSION")
+    ? {
+        eyebrow: "Review ready",
+        title: "Evidence review ready.",
+        detail: "No correction or training decision has been changed.",
+        pct: 100,
       }
     : {
-        eyebrow: "Vision engine",
-        title: "Building correction.",
-        detail: "Reading the frame and forcing one answer.",
+        eyebrow: "Vision",
+        title: "Reviewing evidence.",
+        detail: "Checking what the media supports and where it stops.",
         pct: 65,
       };
 
@@ -1703,7 +1793,7 @@ function LoadingState({
           </p>
         </div>
 
-        <h1 className="mt-5 max-w-3xl text-4xl font-black tracking-tight text-white drop-shadow-[0_0_36px_rgba(52,211,153,0.22)] sm:text-5xl">
+        <h1 className="mt-4 max-w-3xl text-3xl font-semibold tracking-[-.035em] text-white sm:text-[40px]">
           {stage.title}
         </h1>
 
@@ -1771,7 +1861,7 @@ function LoadingState({
 
         <div className="mt-3 flex items-center justify-between">
           <p className="text-xs text-white/35">
-            No technique dump. One correction only.
+            Observation is not a coach decision.
           </p>
 
           <p className="text-[10px] font-semibold tracking-[0.12em] text-emerald-200/60">
@@ -1784,6 +1874,7 @@ function LoadingState({
 }
 
 export default function SenseiVisionScreen({
+  embedded = false,
   sport,
   setSport,
   clipLabel,
@@ -1799,7 +1890,7 @@ export default function SenseiVisionScreen({
   running,
   buildStage,
   error,
-  analysis,
+  reviewPackage,
   chatInput,
   setChatInput,
   chatSending,
@@ -1809,8 +1900,6 @@ export default function SenseiVisionScreen({
   quickPrompts,
   onQuickPrompt,
 }: Props) {
-  const finding = analysis?.findings?.[0] || null;
-
   const skeleton = useMemo(
     () => getSkeletonState(chatMessages),
     [chatMessages]
@@ -1821,26 +1910,25 @@ export default function SenseiVisionScreen({
         previewUrl,
         running,
         buildStage,
-        finding,
+        complete: Boolean(reviewPackage),
       }),
-    [previewUrl, running, buildStage, finding]
+    [previewUrl, running, buildStage, reviewPackage]
   );
   const systemLog = useMemo(
-    () => visionSystemLog({ activeIndex: systemStepIndex, posePreview }),
-    [systemStepIndex, posePreview]
+    () => visionSystemLog({ activeIndex: systemStepIndex }),
+    [systemStepIndex]
   );
   const currentSystemState = systemLog[systemLog.length - 1]?.label;
 
   return (
     <div
       className={cn(
-        interTight.className,
-        "min-h-screen overflow-hidden bg-[#020714] font-medium text-white"
+        embedded ? "min-h-0 overflow-hidden bg-transparent font-medium text-white" : "min-h-screen overflow-hidden bg-[#020714] font-medium text-white"
       )}
     >
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(52,211,153,0.12),transparent_34%),radial-gradient(circle_at_78%_12%,rgba(168,85,247,0.10),transparent_32%),radial-gradient(circle_at_55%_95%,rgba(244,63,94,0.08),transparent_34%)]" />
-      <div className="relative mx-auto grid w-full max-w-[1720px] gap-5 px-4 pb-24 pt-5 sm:px-5 lg:grid-cols-[470px_minmax(0,1fr)] xl:gap-6">
-        <aside className="contents lg:sticky lg:top-20 lg:block lg:self-start lg:space-y-5">
+      <div className={cn("pointer-events-none inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(52,211,153,0.12),transparent_34%),radial-gradient(circle_at_78%_12%,rgba(168,85,247,0.10),transparent_32%),radial-gradient(circle_at_55%_95%,rgba(244,63,94,0.08),transparent_34%)]", embedded ? "absolute" : "fixed")} />
+      <div className={cn("relative mx-auto grid w-full max-w-[1760px] gap-5 px-4 pt-5 sm:px-5", embedded ? "grid-cols-1 pb-5" : "pb-24 lg:grid-cols-[360px_minmax(0,1fr)] xl:gap-6")}>
+        <aside className={cn(embedded ? "space-y-5" : "contents lg:sticky lg:top-20 lg:block lg:self-start lg:space-y-5")}>
           <div className="order-1 lg:order-none">
             <UploadPanel
               sport={sport}
@@ -1857,8 +1945,7 @@ export default function SenseiVisionScreen({
               onReset={onReset}
               running={running}
               error={error}
-              systemState={currentSystemState}
-              correctionLocked={Boolean(finding)}
+              correctionLocked={Boolean(reviewPackage)}
             />
           </div>
 
@@ -1880,19 +1967,6 @@ export default function SenseiVisionScreen({
             )}
           </AnimatePresence>
 
-          <div className="order-4 lg:order-none">
-            <ChatPanel
-              chatMessages={chatMessages}
-              chatInput={chatInput}
-              setChatInput={setChatInput}
-              chatSending={chatSending}
-              onSendChat={onSendChat}
-              onChatKeyDown={onChatKeyDown}
-              quickPrompts={quickPrompts}
-              onQuickPrompt={onQuickPrompt}
-              systemLog={running ? systemLog : []}
-            />
-          </div>
         </aside>
 
         <main className="order-2 space-y-5 lg:order-none">
@@ -1907,43 +1981,56 @@ export default function SenseiVisionScreen({
               >
                 <LoadingState buildStage={buildStage} activeIndex={systemStepIndex} />
               </motion.div>
-            ) : finding ? (
+            ) : reviewPackage ? (
               <motion.div
-                key="analysis"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
+                key="evidence-review"
+                variants={resultReveal}
+                initial="hidden"
+                animate="visible"
                 exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.24 }}
                 className="space-y-5"
               >
-              {previewUrl && (
-                <Surface className="overflow-hidden p-0">
-                  <div className="border-b border-white/[0.07] px-5 py-4">
-                    <SectionTitle
-                      eyebrow="Evidence"
-                      title="This is the frame"
-                      subtitle="Read the position first. Then read the correction."
-                      right={<Badge label="Frame locked" tone="good" />}
-                    />
-                  </div>
+                <div className="grid items-start gap-5 xl:grid-cols-[minmax(320px,0.72fr)_minmax(0,1.28fr)]" style={embedded ? { gridTemplateColumns: "minmax(0, 1fr)" } : undefined}>
+                  {previewUrl && (
+                    <motion.div variants={resultItem} className="xl:sticky xl:top-20">
+                      <Surface className="overflow-hidden p-0">
+                        <div className="border-b border-white/[0.07] px-5 py-4">
+                          <SectionTitle
+                            eyebrow="Evidence"
+                            title="Media preserved"
+                            subtitle="Review the source beside Vision's claims."
+                            right={<Badge label="Source media" tone="good" />}
+                          />
+                        </div>
+                        <div className="p-4">
+                          <FrameScanner
+                            previewUrl={previewUrl}
+                            selectedFileName={selectedFileName}
+                            running={false}
+                            systemState="Review ready"
+                            locked
+                          />
+                        </div>
+                      </Surface>
+                    </motion.div>
+                  )}
+                  <motion.div variants={resultItem}>
+                      <VisionReviewResult reviewPackage={reviewPackage} embedded={embedded} />
+                  </motion.div>
+                </div>
 
-                  <div className="p-4">
-                    <FrameScanner
-                      previewUrl={previewUrl}
-                      selectedFileName={selectedFileName}
-                      running={running}
-                      systemState={currentSystemState}
-                      locked
-                    />
-                  </div>
-                </Surface>
-              )}
-
-              <PrimaryCorrection finding={finding} />
-
-              <TrainingBlock finding={finding} />
-
-              <ProofGate finding={finding} />
+                <motion.div variants={resultItem}>
+                  <ChatPanel
+                    chatMessages={chatMessages}
+                    chatInput={chatInput}
+                    setChatInput={setChatInput}
+                    chatSending={chatSending}
+                    onSendChat={onSendChat}
+                    onChatKeyDown={onChatKeyDown}
+                    quickPrompts={quickPrompts}
+                    onQuickPrompt={onQuickPrompt}
+                  />
+                </motion.div>
               </motion.div>
             ) : previewUrl ? (
               <motion.div
@@ -1968,7 +2055,7 @@ export default function SenseiVisionScreen({
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.22 }}
               >
-                <EmptyState />
+                <EmptyState embedded={embedded} />
               </motion.div>
             )}
           </AnimatePresence>

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { isMaintenanceAuthorized } from "@/lib/security/maintenanceAuth";
+import { logServerError, requestId, safeServerError } from "@/lib/security/responses";
 
 const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
 
@@ -99,11 +101,16 @@ function inferDisciplines(
   };
 }
 
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const key = url.searchParams.get("key");
+export async function GET() {
+  return new NextResponse("Method Not Allowed", {
+    status: 405,
+    headers: { Allow: "POST" },
+  });
+}
 
-  if (!key || key !== process.env.ADMIN_SYNC_KEY) {
+export async function POST(req: Request) {
+  const id = requestId(req);
+  if (!isMaintenanceAuthorized(req)) {
     return new NextResponse("Forbidden", { status: 403 });
   }
 
@@ -123,8 +130,6 @@ export async function GET(req: Request) {
     });
 
     if (!overpassRes.ok) {
-      const text = await overpassRes.text();
-      console.error("Overpass error:", text);
       return new NextResponse("Overpass error", { status: 502 });
     }
 
@@ -182,19 +187,8 @@ export async function GET(req: Request) {
       .upsert(rows, { onConflict: "osm_id" });
 
     if (error) {
-      console.error("Supabase upsert error:", error);
-      return NextResponse.json(
-        {
-          message: "Supabase upsert failed",
-          error: {
-            message: error.message,
-            details: error.details,
-            hint: error.hint,
-            code: error.code,
-          },
-        },
-        { status: 500 }
-      );
+      logServerError("admin-sync-uae-gyms-upsert", id);
+      return safeServerError(id);
     }
 
     return NextResponse.json({
@@ -202,8 +196,8 @@ export async function GET(req: Request) {
       totalFromOSM: elements.length,
       upserted: rows.length,
     });
-  } catch (err: any) {
-    console.error("Unexpected error:", err);
-    return new NextResponse("Unexpected error", { status: 500 });
+  } catch (err: unknown) {
+    logServerError("admin-sync-uae-gyms", id, err);
+    return safeServerError(id);
   }
 }

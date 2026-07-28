@@ -4,6 +4,8 @@ import React from "react";
 import Link from "next/link";
 import AppShell from "./AppShell";
 import ProfileForm from "./ProfileForm";
+import { useWorkflow } from "./WorkflowProvider";
+import CoachConnectionCard from "./CoachConnectionCard";
 
 function LegalRow({
   href,
@@ -83,30 +85,30 @@ function LegalControlsSection() {
         </div>
 
         <h2 className="mt-2 text-xl font-semibold tracking-[-0.02em] text-white">
-          Controls that protect the file
+          Controls that protect your profile
         </h2>
 
         <p className="mt-2 text-sm leading-6 text-white/45">
-          Consent, privacy, export, deletion, and combat safety rules stay attached
-          to the fighter profile.
+          Consent, privacy, export, deletion, and combat safety guidance stay
+          with your profile.
         </p>
       </div>
 
       <div className="space-y-2.5">
         <LegalRow
           href="/legal/data"
-          title="Data & Consent Controls"
-          description="AI processing consent, sensitive training data consent, export, and deletion request."
+          title="Data and consent"
+          description="Manage consent, export your data, or request deletion."
           tone="emerald"
-          status="Required"
+          status="Manage"
         />
 
         <LegalRow
           href="/legal/safety"
           title="Training Safety"
-          description="Combat sport risk, concussion warning, youth athlete supervision, and emergency guidance."
+          description="Combat-sport risk, concussion guidance, youth supervision, and emergencies."
           tone="rose"
-          status="Critical"
+          status="Important"
         />
 
         <LegalRow
@@ -114,49 +116,73 @@ function LegalControlsSection() {
           title="Privacy Policy"
           description="How Disciplin collects, uses, stores, and protects user data."
           tone="cyan"
-          status="Live"
         />
 
         <LegalRow
           href="/legal/terms"
           title="Terms & Conditions"
-          description="Platform rules, training risk, AI limitations, and user responsibility."
+          description="Rules for using Disciplin, including training risk and responsibility."
           tone="neutral"
-          status="Live"
         />
 
         <LegalRow
           href="/legal/cookies"
           title="Cookie & Tracking Policy"
-          description="Essential storage, analytics, marketing cookies, and opt-out position."
+          description="How essential storage, analytics, and optional tracking are used."
           tone="amber"
-          status="Policy"
         />
       </div>
 
       <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 px-4 py-3">
         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/35">
-          Training Notice
+          Important
         </p>
 
         <p className="mt-1 text-xs leading-5 text-white/45">
-          Disciplin gives informational coaching support only. It is not medical
-          advice, injury diagnosis, emergency guidance, physiotherapy, or guaranteed
-          performance outcome.
+          Disciplin supports training decisions. It does not provide medical advice,
+          diagnose injuries, replace emergency care or physiotherapy, or guarantee
+          performance.
         </p>
       </div>
     </section>
   );
 }
 
-export default function ProfileClient() {
+export default function ProfileClient({ embedded = false }: { embedded?: boolean } = {}) {
+  const { authority } = useWorkflow();
+  const coachingSummary =
+    authority.authorityState === "COACH_BACKEND_UNAVAILABLE"
+      ? "Your coach connection cannot be confirmed right now."
+      : authority.authorityState === "NO_COACH_CONNECTED"
+        ? "Your notes and evidence remain athlete directed until a coach connects."
+        : authority.authorityState === "COACH_INVITATION_PENDING"
+          ? "Your coach must accept the invitation before they can approve work."
+          : authority.authorityState === "ATHLETE_DIRECTED"
+            ? "Your work remains athlete directed and is not coach approved."
+            : authority.authorityState === "HAS_COACH_PENDING_REVIEW"
+              ? "Your coach is reviewing the recorded correction."
+              : authority.authorityState === "COACH_APPROVED_MISSION"
+                ? "Your connected coach approved the current mission."
+                : "Your coach is connected. No mission is approved yet.";
   return (
     <AppShell
-      badge="FIGHTER FILE"
-      title="Operating profile"
-      subtitle="The identity layer Sensei, Vision, Fuel, and Dashboard use to understand the fighter."
+      badge={embedded ? undefined : "ATHLETE PROFILE"}
+      title={embedded ? undefined : "Your profile"}
+      subtitle={embedded ? undefined : "Your sport, experience, limits, and coaching context."}
       className="pb-24"
     >
+      <section className="rounded-[22px] border border-white/[0.08] bg-white/[0.025] px-5 py-4">
+        <p className="app-label text-emerald-200/65">Coaching authority</p>
+        <p className="mt-2 text-base font-semibold text-white">
+          {authority.authorityState === "NO_COACH_CONNECTED"
+            ? "Athlete directed"
+            : authority.fuel.authorityLabel}
+        </p>
+        <p className="mt-1 text-sm leading-6 text-white/48">
+          {coachingSummary}
+        </p>
+      </section>
+      <CoachConnectionCard />
       <ProfileForm />
       <LegalControlsSection />
     </AppShell>

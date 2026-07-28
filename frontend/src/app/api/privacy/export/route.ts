@@ -13,9 +13,32 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const [consents, privacyRequests] = await Promise.all([
+  const [
+    consents,
+    privacyRequests,
+    coachRelationships,
+    missionSubmissions,
+    missionVersions,
+    coachAuditEvents,
+  ] = await Promise.all([
     supabase.from("user_consents").select("*").eq("user_id", user.id),
     supabase.from("privacy_requests").select("*").eq("user_id", user.id),
+    supabase
+      .from("coach_relationships")
+      .select("*")
+      .or(`athlete_user_id.eq.${user.id},coach_user_id.eq.${user.id}`),
+    supabase
+      .from("mission_submissions")
+      .select("*")
+      .eq("athlete_user_id", user.id),
+    supabase
+      .from("mission_versions")
+      .select("*")
+      .or(`athlete_user_id.eq.${user.id},coach_user_id.eq.${user.id}`),
+    supabase
+      .from("coach_audit_events")
+      .select("*")
+      .eq("actor_user_id", user.id),
   ]);
 
   const exportData = {
@@ -27,8 +50,10 @@ export async function GET() {
     },
     consents: consents.data || [],
     privacyRequests: privacyRequests.data || [],
-    note:
-      "This export includes compliance-layer records. Add app-specific tables here as Disciplin expands.",
+    coachRelationships: coachRelationships.data || [],
+    missionSubmissions: missionSubmissions.data || [],
+    missionVersions: missionVersions.data || [],
+    coachAuditEvents: coachAuditEvents.data || [],
   };
 
   return NextResponse.json(exportData, {

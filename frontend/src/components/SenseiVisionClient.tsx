@@ -4,14 +4,35 @@ import React, { useEffect, useMemo, useState } from "react";
 import { FilesetResolver, PoseLandmarker } from "@mediapipe/tasks-vision";
 import SenseiVisionScreen from "@/components/SenseiVisionScreen";
 import type { VisionAnalysis } from "@/lib/senseiVisionTypes";
+import {
+  buildReviewPackage,
+  canVisionAnswer,
+  validateVisionModelOutput,
+  VISION_SYSTEM_INSTRUCTION,
+  type AthleteContext,
+  type VisionMediaEvidence,
+  type VisionReviewPackage,
+} from "@/lib/visionGovernance";
+import { mergeWorkflow } from "@/lib/workflow/contracts";
+import { useProfile } from "@/components/ProfileProvider";
+import { readUserJson, removeUserValue, writeUserJson } from "@/lib/userScopedStorage";
+import { validateClientImage } from "@/lib/security/imagePolicy";
+import { useWorkflow } from "@/components/WorkflowProvider";
 
 export type VisionBuildStage =
   | "IDLE"
   | "UPLOADING_FRAME"
+  | "FRAME_LOCKED"
   | "READING_FRAME"
+  | "SKELETON_DETECTED"
+  | "CORRECTION_FOUND"
+  | "BREAK_POINT_IDENTIFIED"
+  | "MISSION_UPDATED"
   | "BUILDING_CORRECTION"
   | "DONE"
   | "ERROR";
+
+type VisionCommunicationMode = "ANALYSIS" | "COACHING";
 
 export type VisionChatMessage = {
   id: string;
@@ -107,6 +128,17 @@ type VisionMemoryProfile = {
   memoryLine: string;
   instruction: string;
   recurringCorrections: string[];
+};
+
+type VisionPlanUpdate = {
+  updatedAt: string;
+  mode: VisionCommunicationMode;
+  activeCorrection: string;
+  proofStatus: string;
+  nextDrill: string;
+  senseiHandoff: string;
+  fuelRelevance: string;
+  timestamp: string;
 };
 
 const OPENING_CREATION_CATEGORIES = [
@@ -272,18 +304,13 @@ function getProofStatusFromFinding(finding: any) {
   return "Unknown";
 }
 
-function readVisionMemoryStore(): VisionMemoryStore {
-  if (typeof window === "undefined") {
-    return { version: 1, records: [] };
-  }
-
+function readVisionMemoryStore(userId?: string | null): VisionMemoryStore {
   try {
-    const raw = localStorage.getItem("disciplin_vision_memory");
-    if (!raw) return { version: 1, records: [] };
-
-    const parsed = JSON.parse(raw);
-    const records = Array.isArray(parsed?.records)
-      ? parsed.records
+    const parsed = readUserJson<unknown>(userId, "disciplin_vision_memory");
+    if (!parsed) return { version: 1, records: [] };
+    const parsedRecord = parsed as { records?: unknown };
+    const records = Array.isArray(parsedRecord.records)
+      ? parsedRecord.records
       : Array.isArray(parsed)
         ? parsed
         : [];
@@ -309,17 +336,17 @@ function readVisionMemoryStore(): VisionMemoryStore {
           totalOccurrences: Number(record.totalOccurrences || 1),
           successRate: Number(record.successRate || 0),
           sport: cleanText(record.sport || "Unknown"),
-          context:
+          context: (
             cleanText(record.context).toLowerCase() === "competition"
               ? "Competition"
-              : "Training",
+              : "Training") as VisionTrainingContext,
           round: Number.isFinite(Number(record.round)) ? Number(record.round) : null,
           clipLabel: cleanText(record.clipLabel || ""),
           severity: cleanText(record.severity || "Unknown"),
           openingStatus: cleanText(record.openingStatus || ""),
           createdAt: cleanText(record.createdAt || record.lastSeen || ""),
         }))
-        .filter((record: VisionMemoryRecord) => record.correctionKey)
+        .filter((record: VisionMemoryRecord) => Boolean(record.correctionKey))
         .slice(0, 500),
     };
   } catch {
@@ -327,16 +354,11 @@ function readVisionMemoryStore(): VisionMemoryStore {
   }
 }
 
-function writeVisionMemoryStore(store: VisionMemoryStore) {
-  if (typeof window === "undefined") return;
-
-  localStorage.setItem(
-    "disciplin_vision_memory",
-    JSON.stringify({
+function writeVisionMemoryStore(store: VisionMemoryStore, userId?: string | null) {
+  writeUserJson(userId, "disciplin_vision_memory", {
       version: 1,
       records: store.records.slice(0, 500),
-    })
-  );
+    });
 }
 
 function ordinalSuffix(value: number) {
@@ -504,7 +526,8 @@ function buildVisionMemoryRecord(
 
 function rememberVisionFrame(
   analysis: VisionAnalysis,
-  store = readVisionMemoryStore()
+  userId?: string | null,
+  store = readVisionMemoryStore(userId)
 ) {
   const record = buildVisionMemoryRecord(analysis, store);
   if (!record) return store;
@@ -514,7 +537,7 @@ function rememberVisionFrame(
     ...store.records.filter((item) => item.analysisId !== record.analysisId),
   ].slice(0, 500);
   const nextStore = { version: 1 as const, records };
-  writeVisionMemoryStore(nextStore);
+  writeVisionMemoryStore(nextStore, userId);
   return nextStore;
 }
 
@@ -543,7 +566,8 @@ function memoryTrend(records: VisionMemoryRecord[]): VisionMemoryTrend {
 
 function buildVisionMemoryProfile(
   active: VisionAnalysis | null,
-  store = readVisionMemoryStore()
+  userId?: string | null,
+  store = readVisionMemoryStore(userId)
 ): VisionMemoryProfile {
   const activeRecord = active ? buildVisionMemoryRecord(active, store) : null;
   const correctionKey = activeRecord?.correctionKey || "";
@@ -629,7 +653,7 @@ function buildVisionMemoryProfile(
       ? `This is not new. This is the ${ordinalWord(totalOccurrences)} occurrence.`
       : activeRecord
         ? "First time Vision has tagged this correction."
-        : "No active correction loaded.";
+        : "No active correction yet.";
 
   return {
     store,
@@ -743,7 +767,7 @@ function findTimelineValue(
   return undefined;
 }
 
-function readFighterConstraints(): FighterConstraintContext {
+function readFighterConstraints(userId?: string | null): FighterConstraintContext {
   const sources: unknown[] = [];
   const storageKeys = [
     "disciplin_profile",
@@ -755,12 +779,8 @@ function readFighterConstraints(): FighterConstraintContext {
   ];
 
   storageKeys.forEach((key) => {
-    try {
-      const raw = localStorage.getItem(key);
-      if (raw) sources.push(JSON.parse(raw));
-    } catch {
-      // Ignore unrelated or malformed local state.
-    }
+    const value = readUserJson<unknown>(userId, key);
+    if (value) sources.push(value);
   });
 
   const read = (keys: string[]) => {
@@ -890,7 +910,9 @@ function applyFighterConstraints(
     ),
   } as VisionAnalysis;
 }
-   function readTimelineContext(
+
+function readTimelineContext(
+  userId?: string | null,
   history: VisionAnalysis[] = [],
   active?: VisionAnalysis | null
 ): VisionTimelineContext {
@@ -905,12 +927,8 @@ function applyFighterConstraints(
   ];
 
   storageKeys.forEach((key) => {
-    try {
-      const raw = localStorage.getItem(key);
-      if (raw) sources.push(JSON.parse(raw));
-    } catch {
-      // Ignore unrelated or malformed local state.
-    }
+    const value = readUserJson<unknown>(userId, key);
+    if (value) sources.push(value);
   });
 
   const read = (keys: string[]) => {
@@ -1896,6 +1914,7 @@ function inferTimestampCorrection(f: any) {
       "Fix the break point before chasing the finish."
   );
 }
+
 function inferDidCreateIt(f: any, openingStatus: string) {
   const existing = cleanText(
     f?.did_i_create_it || f?.opening_created_answer || f?.created_opening || ""
@@ -2418,6 +2437,103 @@ function buildOpeningCreationInstruction({
   ].join("\n");
 }
 
+function wait(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+}
+
+function inferCommunicationMode(
+  file: File | null,
+  clipLabel: string,
+  notes: string
+): VisionCommunicationMode {
+  const context = `${clipLabel} ${notes}`.toLowerCase();
+  const analysisContext =
+    Boolean(file?.type?.startsWith("video/")) ||
+    /film|review|post.session|post session|competition|fight review|round/.test(
+      context
+    );
+
+  return analysisContext ? "ANALYSIS" : "COACHING";
+}
+
+function communicationInstruction(mode: VisionCommunicationMode) {
+  return mode === "ANALYSIS"
+    ? [
+        "COMMUNICATION MODE: ANALYSIS.",
+        "Teach with a short causal chain.",
+        "Use timestamp, observation, consequence, reason, and correction.",
+        "Explain exactly where the rep broke and what happens next time.",
+      ].join(" ")
+    : [
+        "COMMUNICATION MODE: COACHING.",
+        "Lead with short commands that survive fatigue.",
+        "No analytical paragraph.",
+        "Use Coach Command and FORCE, SEE, GO.",
+      ].join(" ");
+}
+
+function writeVisionPlanUpdate(
+  analysis: VisionAnalysis,
+  mode: VisionCommunicationMode,
+  userId?: string | null
+) {
+  const finding = ((analysis as any)?.findings || [])[0] || {};
+  const train = Array.isArray(finding.train)
+    ? finding.train.map((item: unknown) => cleanText(String(item))).filter(Boolean)
+    : [];
+  const activeCorrection = cleanText(
+    finding.decision ||
+      finding.correction ||
+      finding.fix_next_rep ||
+      finding.title ||
+      ""
+  );
+  const nextDrill = cleanText(
+    finding.todays_proof || train[0] || finding.drill_prescribed || ""
+  );
+  const proofStatus = cleanText(
+    finding.proof_status || finding.retention_status || "Proof required"
+  );
+  const fuelRelevance = cleanText(
+    finding.fuel_relevance ||
+      finding.recovery_relevance ||
+      ((analysis as any)?.fighter_constraints?.recoveryState || "")
+  );
+  const timestamp = cleanText(finding.timestamp || finding.timecode || "");
+  const senseiHandoff = [
+    activeCorrection,
+    nextDrill ? `Next drill: ${nextDrill}` : "",
+    proofStatus ? `Proof: ${proofStatus}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const update: VisionPlanUpdate = {
+    updatedAt: new Date().toISOString(),
+    mode,
+    activeCorrection,
+    proofStatus,
+    nextDrill,
+    senseiHandoff,
+    fuelRelevance,
+    timestamp,
+  };
+
+  writeUserJson(userId, "disciplin_vision_plan_update", update);
+  writeUserJson(userId, "disciplin_active_correction", activeCorrection);
+  writeUserJson(userId, "disciplin_vision_proof_status", proofStatus);
+  writeUserJson(userId, "disciplin_next_drill", nextDrill);
+  writeUserJson(userId, "disciplin_sensei_handoff", senseiHandoff);
+
+  if (fuelRelevance) {
+    writeUserJson(userId, "disciplin_vision_fuel_relevance", fuelRelevance);
+  }
+
+  window.dispatchEvent(
+    new CustomEvent("disciplin:vision-plan-updated", { detail: update })
+  );
+}
+
 function fileToBase64(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -2519,9 +2635,9 @@ function normalizeVisionAnalysis(raw: any, selectedSport = ""): VisionAnalysis {
   if (!raw || typeof raw !== "object") {
     return {
       analysis_id: uid(),
-      clipLabel: "Frame upload",
+      clipLabel: "Evidence",
       summary:
-        "Vision returned no usable analysis. Upload a cleaner frame or try again.",
+        "Vision couldn’t find a clear observation. Choose a clearer image and try again.",
       findings: [],
     } as VisionAnalysis;
   }
@@ -2567,8 +2683,8 @@ function normalizeVisionAnalysis(raw: any, selectedSport = ""): VisionAnalysis {
   return {
     ...raw,
     analysis_id: cleanText(raw.analysis_id || uid()),
-    clipLabel: cleanText(raw.clipLabel || "Frame upload"),
-    summary: cleanMultiline(raw.summary || "No summary returned."),
+    clipLabel: cleanText(raw.clipLabel || "Evidence"),
+    summary: cleanMultiline(raw.summary || "No clear observation."),
     findings,
   } as VisionAnalysis;
 }
@@ -2846,21 +2962,37 @@ function formatVisionChatReply(raw: string) {
         parsed?.answer ||
         parsed?.response ||
         parsed?.message ||
-                parsed?.text ||
+        parsed?.text ||
         parsed?.data?.answer ||
         parsed?.data?.response;
 
       value = cleanMultiline(answer || "");
     } catch {
-      return "No clear coaching answer came back. Ask what to force, when to go, or what to drill.";
+      return "Vision can’t answer that from this evidence. Ask what is visible or uncertain.";
     }
   }
 
   if (!value || value === "[object Object]") {
-    return "No clear coaching answer came back. Ask what to force, when to go, or what to drill.";
+    return "Vision can’t answer that from this evidence. Ask what is visible or uncertain.";
   }
 
   return compact(coachLanguage(value), 520);
+}
+
+function shapeReplyForMode(
+  value: string,
+  mode: VisionCommunicationMode
+) {
+  const cleaned = cleanMultiline(value);
+  if (!cleaned || mode === "ANALYSIS") return cleaned;
+
+  return cleaned
+    .split(/\n+|(?<=[.!?])\s+/)
+    .map((line) => cleanText(line.replace(/^[A-Z ]+:\s*/, "")))
+    .filter(Boolean)
+    .map((line) => line.split(/\s+/).slice(0, 8).join(" "))
+    .slice(0, 4)
+    .join("\n");
 }
 
 function buildQuickReply(prompt: string, analysis: VisionAnalysis): string | null {
@@ -2870,7 +3002,7 @@ function buildQuickReply(prompt: string, analysis: VisionAnalysis): string | nul
 
   const top = findings[0];
 
-  if (!top) return "No active frame correction is loaded yet.";
+  if (!top) return "No clear observation is attached to this evidence.";
 
   const p = cleanText(prompt).toLowerCase();
 
@@ -2898,7 +3030,7 @@ function buildQuickReply(prompt: string, analysis: VisionAnalysis): string | nul
     const openingSignal = cleanMultiline(top.memory_opening_signal || "");
 
     return [
-      "VISION MEMORY",
+      "PAST EVIDENCE",
       occurrences > 1
         ? `This is rep ${occurrences}.`
         : "First time Vision tagged this correction.",
@@ -3086,15 +3218,15 @@ function buildQuickReply(prompt: string, analysis: VisionAnalysis): string | nul
   }
 
   if (p.includes("what breaks first")) {
-    return cleanMultiline(top.break_point || "No break point returned.");
+    return cleanMultiline(top.break_point || "No clear break point is visible.");
   }
 
   if (p.includes("what should i keep")) {
-    return cleanMultiline(top.good || "No keep signal returned.");
+    return cleanMultiline(top.good || "No clear strength is visible.");
   }
 
   if (p.includes("smallest fix next rep")) {
-    return cleanMultiline(top.fix_next_rep || "No next-rep command returned.");
+    return cleanMultiline(top.fix_next_rep || "No next step is supported by this evidence.");
   }
 
   if (
@@ -3156,7 +3288,7 @@ function buildQuickReply(prompt: string, analysis: VisionAnalysis): string | nul
 
     return lines.length
       ? lines.join("\n")
-      : "No clear correction returned for this frame.";
+      : "No clear observation is available for this image.";
   }
 
   if (p.includes("live rounds") || p.includes("ignore this")) {
@@ -3172,7 +3304,7 @@ function buildQuickReply(prompt: string, analysis: VisionAnalysis): string | nul
         .join("\n\n");
     }
 
-    return "No live-round consequence returned.";
+    return "This evidence does not show the live-round consequence.";
   }
 
   if (p.includes("train today")) {
@@ -3182,18 +3314,49 @@ function buildQuickReply(prompt: string, analysis: VisionAnalysis): string | nul
       return `Train this today:\n- ${train.join("\n- ")}`;
     }
 
-    return "No training block returned.";
+    return "No training task is supported by this evidence.";
   }
 
   return null;
 }
 
-export default function SenseiVisionClient() {
+function buildEvidenceReply(
+  prompt: string,
+  reviewPackage: VisionReviewPackage
+): string | null {
+  const question = cleanText(prompt).toLowerCase();
+  const claim = (kind: string) =>
+    reviewPackage.claims.find((item) => item.kind === kind);
+  const observation = claim("OBSERVATION");
+  const inference = claim("INFERENCE");
+  const uncertainty = claim("UNCERTAINTY");
+
+  if (/where|which frame|timestamp|timecode/.test(question)) {
+    const reference =
+      observation?.provenance.timestampStart ||
+      observation?.provenance.frameReference ||
+      reviewPackage.media.name;
+    return `Evidence: ${reference}.\nObservation: ${observation?.statement || "No clear observation."}`;
+  }
+
+  if (/uncertain|cannot know|limit/.test(question)) {
+    return uncertainty?.statement || reviewPackage.evidenceAssessment.cannotEstablish.join(". ");
+  }
+
+  if (/before|react|why|matter/.test(question)) {
+    return inference?.statement || reviewPackage.evidenceAssessment.request ||
+      "This evidence supports observation, but not a causal explanation.";
+  }
+
+  return null;
+}
+
+export default function SenseiVisionClient({ embedded = false }: { embedded?: boolean } = {}) {
+  const { user } = useProfile();
+  const { authority } = useWorkflow();
   const [sport, setSport] = useState("Wrestling");
-  const [clipLabel, setClipLabel] = useState("Frame upload");
-  const [notes, setNotes] = useState(
-    "Whenever I try to do a Russian tie snap, I always get sprawled on"
-  );
+  const [clipLabel, setClipLabel] = useState("");
+  const [notes, setNotes] = useState("");
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedFileName, setSelectedFileName] = useState("");
@@ -3203,7 +3366,7 @@ const [posePreview, setPosePreview] = useState<any | null>(null);
   const [buildStage, setBuildStage] = useState<VisionBuildStage>("IDLE");
   const [error, setError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<VisionAnalysis | null>(null);
-const [history, setHistory] = useState<VisionAnalysis[]>([]);
+  const [reviewPackage, setReviewPackage] = useState<VisionReviewPackage | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
 
@@ -3211,54 +3374,23 @@ const [history, setHistory] = useState<VisionAnalysis[]>([]);
     {
       id: uid(),
       role: "system",
-      text: "Vision only answers questions tied to the active frame and correction.",
+      text: "Vision only answers questions supported by the active evidence.",
       ts: Date.now(),
     },
   ]);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem("disciplin_latest_vision");
-      if (!raw) return;
-
-      const parsed = JSON.parse(raw) as VisionAnalysis;
-      const restored = applyFighterConstraints(
-        enrichAnalysisWithFighterMemory(normalizeVisionAnalysis(parsed), history),
-        readFighterConstraints()
-      );
-      setAnalysis(
-        applyVisionMemoryProfile(
-          restored,
-          buildVisionMemoryProfile(restored, readVisionMemoryStore())
-        )
-      );
-    } catch {
-      // ignore bad local storage
-    }
-  }, [history]);
-useEffect(() => {
-  const saved = localStorage.getItem(
-    "disciplin_vision_history"
-  );
-
-  if (saved) {
-    const normalizedHistory = JSON.parse(saved)
-      .map((item: any) => normalizeVisionAnalysis(item))
-      .slice(0, 20);
-
-    setHistory(
-      normalizedHistory.map((item: VisionAnalysis, index: number) =>
-        enrichAnalysisWithFighterMemory(item, normalizedHistory.slice(index + 1))
-      )
-    );
-  }
-}, []);
+    setReviewPackage(readUserJson<VisionReviewPackage>(user?.id, "disciplin_latest_vision_review"));
+    setAnalysis(null);
+    setSelectedFile(null);
+    setSelectedFileName("");
+  }, [user?.id]);
   const quickPrompts = useMemo(
     () => [
-      "How do I make him react?",
-      "What reaction am I waiting for?",
-      "When do I attack?",
-      "What do I drill today?",
+      "Where does the position begin to change?",
+      "What is visible before the opponent reacts?",
+      "What part of this is uncertain?",
+      "Which frame supports this observation?",
     ],
     []
   );
@@ -3299,11 +3431,22 @@ useEffect(() => {
     ]);
   }
 
-  function onFileChange(file: File | null) {
+  async function onFileChange(file: File | null) {
+  if (file) {
+    const validationError = await validateClientImage(file);
+    if (validationError) {
+      setSelectedFile(null);
+      setSelectedFileName("");
+      setPreviewUrl(null);
+      setError(validationError);
+      return;
+    }
+  }
   setSelectedFile(file);
   setSelectedFileName(file?.name || "");
   setError(null);
   setPosePreview(null);
+  setReviewPackage(null);
 
   if (previewUrl) {
     URL.revokeObjectURL(previewUrl);
@@ -3322,6 +3465,7 @@ useEffect(() => {
     setBuildStage("IDLE");
     setError(null);
     setAnalysis(null);
+    setReviewPackage(null);
     setChatInput("");
     setChatSending(false);
 
@@ -3329,17 +3473,17 @@ useEffect(() => {
       {
         id: uid(),
         role: "system",
-        text: "Vision reset. Upload a new frame to build a correction.",
+        text: "Ready for new evidence.",
         ts: Date.now(),
       },
     ]);
 
-    localStorage.removeItem("disciplin_latest_vision");
+    removeUserValue(user?.id, "disciplin_latest_vision_review");
   }
 
   async function onAnalyze() {
     if (!selectedFile) {
-      setError("Choose one frame image first.");
+      setError("Choose an image first.");
       return;
     }
 
@@ -3350,35 +3494,33 @@ useEffect(() => {
     try {
       const imageBase64 = await fileToBase64(selectedFile);
 
+      setBuildStage("FRAME_LOCKED");
+      pushSystemMessage("Image ready.");
+      await wait(260);
       setBuildStage("READING_FRAME");
 
       let poseData: any = null;
 
       try {
         poseData = await detectPoseFromFile(selectedFile);
-setPosePreview(poseData);
-        console.log("Vision pose landmarks:", poseData);
+        setPosePreview(poseData);
 
         pushSystemMessage(
           poseData.detected
-            ? `Skeleton detected: ${poseData.landmarkCount} landmarks mapped.`
-            : "No clear skeleton detected. Vision will continue with image-only analysis."
+            ? "Body position is clear enough to review."
+            : "Body position is unclear. Vision will use the image only."
         );
+        setBuildStage("SKELETON_DETECTED");
+        await wait(320);
       } catch (poseErr: any) {
         console.warn("Pose detection failed:", poseErr);
 
         pushSystemMessage(
-          "Skeleton tracking failed on this frame. Vision will continue with image-only analysis."
+          "Body position could not be read. Vision will use the image only."
         );
       }
 
-      const fighterMemory = serializeFighterMemory(history, analysis);
-      const timelineContext = readTimelineContext(history, analysis);
-      const fighterConstraints = readFighterConstraints();
-      const visionMemoryProfile = buildVisionMemoryProfile(
-        analysis,
-        readVisionMemoryStore()
-      );
+      setBuildStage("READING_FRAME");
 
       const res = await fetch("/api/sensei-vision", {
         method: "POST",
@@ -3392,183 +3534,164 @@ setPosePreview(poseData);
           context: notes,
           sport,
           poseLandmarks: poseData,
-          analysisMode: "OPENING_CREATION",
-          fighterMemory,
-          visionMemory: {
-            totalFrames: visionMemoryProfile.totalFrames,
-            activeRecord: visionMemoryProfile.activeRecord,
-            totalOccurrences: visionMemoryProfile.totalOccurrences,
-            successRate: visionMemoryProfile.successRate,
-            trend: visionMemoryProfile.trend,
-            trendLine: visionMemoryProfile.trendLine,
-            sameBreakPointLine: visionMemoryProfile.sameBreakPointLine,
-            roundSignal: visionMemoryProfile.roundSignal,
-            drillingSignal: visionMemoryProfile.drillingSignal,
-            openingSignal: visionMemoryProfile.openingSignal,
-            recurringCorrections: visionMemoryProfile.recurringCorrections,
-          },
-          timelineContext,
-          fighterConstraints,
-          fighterConstraintInstruction: buildConstraintInstruction(fighterConstraints),
-          timelineInstruction: buildTimelineInstruction(timelineContext),
-          fighterMemoryInstruction: fighterMemory.instruction,
-          visionMemoryInstruction: visionMemoryProfile.instruction,
-          previousCorrections: fighterMemory.recentCorrections,
-          recurringPatterns: fighterMemory.signal?.recurringPatterns || [],
-          retentionStatus: fighterMemory.signal?.status || "New or unproven",
-          proofStatus: fighterMemory.signal?.proofStatus || "Unknown",
-          openingCreationInstruction: [
-            buildOpeningCreationInstruction({ sport, notes, poseData }),
-            buildTimelineInstruction(timelineContext),
-            buildConstraintInstruction(fighterConstraints),
-            visionMemoryProfile.instruction,
-          ].join("\n\n"),
+          analysisMode: "EVIDENCE_REVIEW",
+          communicationInstruction: VISION_SYSTEM_INSTRUCTION,
+          openingCreationInstruction: VISION_SYSTEM_INSTRUCTION,
           requiredFields: [
-            "timestamp",
-            "timecode",
             "observation",
-            "consequence",
-            "reason",
-            "correction",
-            "result",
-            "process",
-            "opening_status",
-            "opening_creation",
-            "missing_reaction",
-            "required_opening",
-            "create_it",
-            "reaction_to_force",
-            "attack_after",
-            "did_i_create_it",
-            "reaction_happened",
-            "reaction_recognized",
-            "reaction_attacked",
-            "attack_timing_verdict",
-            "attacked_instead",
-            "decision",
-            "best_opening",
-            "opening_needed",
-            "reaction_required",
-            "opening_why",
-            "opening_how",
-            "attack_after_reaction",
-            "exchange_opening",
-            "exchange_reaction",
-            "exchange_entry",
-            "exchange_break",
-            "where_exchange_broke",
-            "history_signal",
-            "repeated_issue",
-            "history_occurrences",
-            "retention_status",
-            "proof_status",
-            "recurring_patterns",
-            "opponent_punishment",
-            "better_opponent_test",
-            "risk_against_better_opponent",
-            "missing_setup",
-            "next_setup_to_create_opening",
-            "correction_stays",
-            "proof_changes",
-            "todays_proof",
-            "proof_fail",
-            "vision_memory_signal",
-            "memory_total_occurrences",
-            "memory_success_rate",
-            "memory_trend",
-            "memory_same_break_point",
-            "memory_round_signal",
-            "memory_drilling_signal",
-            "memory_opening_signal",
+            "inference",
+            "alternative",
+            "uncertainty",
+            "timestampStart",
+            "timestampEnd",
+            "confidence",
+            "evidence_quality",
+            "evidence_obstructed",
+            "angle_adequate",
+            "shows_setup",
+            "shows_opponent_reaction",
+            "shows_outcome",
           ],
         }),
       });
-
-      setBuildStage("BUILDING_CORRECTION");
 
       const data = (await res.json()) as VisionApiResponse;
 
       if (!res.ok || !data || data.ok === false) {
         throw new Error(
-          data && "error" in data && data.error
-            ? data.error
-            : "Sensei Vision failed to analyze the frame."
+          res.status === 401
+            ? "Sign in to continue."
+            : "Vision couldn’t review this image. Try again.",
         );
       }
 
-      const priorVisionMemoryStore = readVisionMemoryStore();
-      const memoryEnriched = enrichAnalysisWithFighterMemory(
-        normalizeVisionAnalysis(data.analysis, sport),
-        history
+      const normalized = normalizeVisionAnalysis(data.analysis, sport);
+      const primaryFinding = ((data.analysis as any)?.findings || [])[0] || {};
+      const modelOutput = validateVisionModelOutput({
+        ...primaryFinding,
+        observation:
+          primaryFinding.direct_observation ||
+          primaryFinding.observation ||
+          primaryFinding.title ||
+          "",
+        inference:
+          primaryFinding.interpretation ||
+          primaryFinding.reason ||
+          primaryFinding.consequence ||
+          "",
+        alternative:
+          primaryFinding.alternative_interpretation ||
+          primaryFinding.alternative_explanation ||
+          "",
+        uncertainty:
+          primaryFinding.uncertainty ||
+          primaryFinding.evidence_limitation ||
+          (selectedFile.type.startsWith("video/")
+            ? "The clip cannot establish the athlete's internal intention or the coach's priority."
+            : "A single frame cannot establish timing, reaction sequence, or cause."),
+        timestampStart: primaryFinding.timestamp || primaryFinding.timecode || null,
+        timestampEnd: primaryFinding.timestamp_end || null,
+        confidence: primaryFinding.confidence || "LOW",
+      });
+      const media: VisionMediaEvidence = {
+        id: uid(),
+        name: selectedFile.name,
+        kind: selectedFile.type.startsWith("video/") ? "SHORT_CLIP" : "SINGLE_FRAME",
+        mimeType: selectedFile.type || "application/octet-stream",
+        capturedAt: new Date().toISOString(),
+        durationSeconds: null,
+        quality:
+          primaryFinding.evidence_quality === "POOR"
+            ? "POOR"
+            : primaryFinding.evidence_quality === "LIMITED"
+              ? "LIMITED"
+              : "CLEAR",
+        obstructed: primaryFinding.evidence_obstructed === true,
+        angleAdequate: primaryFinding.angle_adequate !== false,
+        showsSetup: primaryFinding.shows_setup === true,
+        showsOpponentReaction: primaryFinding.shows_opponent_reaction === true,
+        showsOutcome: primaryFinding.shows_outcome !== false,
+        footageContext: /competition|fight|bout/i.test(`${clipLabel} ${notes}`)
+          ? "COMPETITION"
+          : "TRAINING",
+      };
+      const athleteContext: AthleteContext | undefined = cleanText(notes)
+        ? {
+            id: uid(),
+            statement: cleanText(notes),
+            question: "What were you trying to do or notice?",
+            createdAt: new Date().toISOString(),
+          }
+        : undefined;
+      const nextReviewPackage = buildReviewPackage({
+        media,
+        output: modelOutput,
+        athleteContext,
+        authorityState: authority.authorityState,
+        evidenceAuthority: authority.evidenceAuthority,
+      });
+
+      setBuildStage("CORRECTION_FOUND");
+      pushSystemMessage("Visible evidence separated from interpretation.");
+      await wait(320);
+
+      setBuildStage("BREAK_POINT_IDENTIFIED");
+      pushSystemMessage("What remains uncertain is marked.");
+      await wait(320);
+
+      setAnalysis(normalized);
+      setReviewPackage(nextReviewPackage);
+      writeUserJson(user?.id, "disciplin_latest_vision_review", nextReviewPackage);
+      const observedClaim = nextReviewPackage.claims.find(
+        (claim) => claim.kind === "OBSERVATION"
       );
-      const constraintAware = applyFighterConstraints(
-        memoryEnriched,
-        fighterConstraints
+      mergeWorkflow(user?.id, {
+        status: "needs_context",
+        observation: observedClaim?.statement || normalized.summary || "Vision observation ready",
+        athleteContext: athleteContext?.statement || null,
+        correction: null,
+        correctionId: null,
+        coach: null,
+        evidence: null,
+        source: "local",
+      });
+      setBuildStage("MISSION_UPDATED");
+      pushSystemMessage(
+        authority.authorityState === "ATHLETE_DIRECTED"
+          ? "Athlete-directed observation saved. It cannot enter Sensei."
+          : "Observation saved. It has not been sent to your coach.",
       );
-      const resolvedTimelineContext = readTimelineContext(history, constraintAware);
-      const normalized = applyTimelineUrgency(
-        constraintAware,
-        resolvedTimelineContext
-      );
-      const remembered = applyVisionMemoryProfile(
-        normalized,
-        buildVisionMemoryProfile(normalized, priorVisionMemoryStore)
-      );
-      rememberVisionFrame(remembered, priorVisionMemoryStore);
-
-      setAnalysis(remembered);
-
-localStorage.setItem(
-  "disciplin_latest_vision",
-  JSON.stringify(remembered)
-);
-
-const existingHistory = JSON.parse(
-  localStorage.getItem("disciplin_vision_history") || "[]"
-).map((item: any) => normalizeVisionAnalysis(item));
-
-const nextHistory = [remembered, ...existingHistory].slice(0, 20);
-
-localStorage.setItem(
-  "disciplin_vision_history",
-  JSON.stringify(nextHistory)
-);
-setHistory(nextHistory);
+      await wait(360);
       setBuildStage("DONE");
 
-      const primaryFinding = (remembered as any)?.findings?.[0];
-      const openingCreation = cleanText(
-        primaryFinding?.opening_status || primaryFinding?.opening_creation || ""
-      );
-
       pushSystemMessage(
-        [
-          `Correction ready: ${cleanText(
-          primaryFinding?.title || "Vision analysis complete"
-          )}`,
-          openingCreation ? `Reaction read: ${openingCreation}` : "",
-        ]
-          .filter(Boolean)
-          .join("\n")
+        "Observation ready. Your coach still decides the correction and practice."
       );
     } catch (err: any) {
       setBuildStage("ERROR");
-      setError(err?.message || "Sensei Vision failed.");
-      pushSystemMessage(`Vision failed: ${err?.message || "unknown error"}`);
+      setError(err?.message || "Vision couldn’t review this image. Try again.");
+      pushSystemMessage("Vision stopped. Check the image and try again.");
     } finally {
       setRunning(false);
     }
   }
 
   function onQuickPrompt(prompt: string) {
-    if (!analysis) {
+    if (!analysis || !reviewPackage) {
       pushSystemMessage(
-        "Run Vision on a frame first. Locked follow-ups only work from an active analysis."
+        "Add evidence first. Vision only answers questions about the active media."
       );
       return;
     }
 
-    const directReply = buildQuickReply(prompt, analysis);
+    const boundary = canVisionAnswer(prompt);
+    if (!boundary.allowed) {
+      pushUserMessage(prompt);
+      pushSystemMessage(boundary.reason);
+      return;
+    }
+
+    const directReply = buildEvidenceReply(prompt, reviewPackage);
 
     pushUserMessage(prompt);
 
@@ -3596,9 +3719,17 @@ setHistory(nextHistory);
 
     if (!question) return;
 
-    if (!analysis) {
+    const boundary = canVisionAnswer(question);
+    if (!boundary.allowed) {
+      pushUserMessage(question);
+      pushSystemMessage(boundary.reason);
+      setChatInput("");
+      return;
+    }
+
+    if (!analysis || !reviewPackage) {
       pushSystemMessage(
-        "Run Vision on a frame first. Chat only works from an active analysis."
+        "Add evidence first. Vision only answers questions about the active media."
       );
       setChatInput("");
       return;
@@ -3609,14 +3740,19 @@ setHistory(nextHistory);
     setChatSending(true);
 
     try {
-      const directReply = buildQuickReply(question, analysis);
+      const directReply = buildEvidenceReply(question, reviewPackage);
 
       if (directReply) {
         pushVisionMessage(directReply);
         return;
       }
 
-      const context = buildVisionContext(analysis);
+      const context = {
+        media: reviewPackage.media,
+        evidenceAssessment: reviewPackage.evidenceAssessment,
+        claims: reviewPackage.claims,
+        athleteContext: reviewPackage.athleteContext,
+      };
 
       const res = await fetch("/api/sensei-vision/chat", {
         method: "POST",
@@ -3626,9 +3762,8 @@ setHistory(nextHistory);
         body: JSON.stringify({
           question,
           context,
-          analysisMode: "OPENING_CREATION",
-          answerRules:
-            "Answer like a coach standing beside the mat. Every cue must be eight words or fewer. Name the position, reaction, timing, counter, and next drill. No motivation, psychology, AI language, corporate language, or long explanations.",
+          analysisMode: "EVIDENCE_REVIEW",
+          answerRules: `${VISION_SYSTEM_INSTRUCTION}\nAnswer only the athlete's question about the active evidence.`,
           analysis_id: (analysis as any)?.analysis_id || null,
           clipLabel: (analysis as any)?.clipLabel || clipLabel,
         }),
@@ -3637,19 +3772,23 @@ setHistory(nextHistory);
       const data = await res.json().catch(() => null);
 
       if (!res.ok) {
-        throw new Error(data?.error || "Vision chat failed.");
+        throw new Error(
+          res.status === 401
+            ? "Sign in to continue."
+            : "Vision couldn’t answer that. Try again.",
+        );
       }
 
       const reply = formatVisionChatReply(
-        data?.answer ||
-          data?.response ||
-          data?.message ||
-          "Vision returned no usable answer."
-      );
+          data?.answer ||
+            data?.response ||
+            data?.message ||
+            "Vision couldn’t answer that from this evidence."
+        );
 
       pushVisionMessage(reply);
     } catch (err: any) {
-      pushSystemMessage(`Vision chat failed: ${err?.message || "unknown error"}`);
+      pushSystemMessage(err?.message || "Vision couldn’t answer that. Try again.");
     } finally {
       setChatSending(false);
     }
@@ -3657,6 +3796,7 @@ setHistory(nextHistory);
 
   return (
     <SenseiVisionScreen
+      embedded={embedded}
       sport={sport}
       setSport={setSport}
       clipLabel={clipLabel}
@@ -3666,7 +3806,6 @@ setHistory(nextHistory);
       selectedFileName={selectedFileName}
      previewUrl={previewUrl}
 posePreview={posePreview}
-   visionHistory={history}
       onFileChange={onFileChange}
       onAnalyze={onAnalyze}
       onReset={onReset}
@@ -3674,6 +3813,7 @@ posePreview={posePreview}
       buildStage={buildStage}
       error={error}
       analysis={analysis}
+      reviewPackage={reviewPackage}
       chatInput={chatInput}
       setChatInput={setChatInput}
       chatSending={chatSending}

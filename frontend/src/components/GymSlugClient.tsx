@@ -2,6 +2,8 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useProfile } from "@/components/ProfileProvider";
+import { readUserJson, writeUserJson } from "@/lib/userScopedStorage";
 
 type Disc = "MMA" | "Wrestling" | "Boxing" | "Sambo" | "BJJ" | "Fitness";
 type Gym = {
@@ -97,7 +99,7 @@ const SAMPLE_GYMS: Gym[] = [
     ],
     reviews: [
       { user: "Nmm", rating: 4.5, text: "Good structure + clean facility. Busy at peak time.", date: "2026-01-12" },
-      { user: "Dylan", rating: 4.0, text: "Solid for consistency. Great conditioning options.", date: "2026-01-18" },
+      { user: "Verified member", rating: 4.0, text: "Solid for consistency. Great conditioning options.", date: "2026-01-18" },
     ],
   },
   {
@@ -154,6 +156,7 @@ const SAMPLE_GYMS: Gym[] = [
 type Tab = "overview" | "classes" | "coaches" | "reviews";
 
 export default function GymsSlugClient({ slug }: { slug: string }) {
+  const { user } = useProfile();
   const gym = useMemo(() => SAMPLE_GYMS.find((g) => g.slug === slug) ?? null, [slug]);
 
   const [tab, setTab] = useState<Tab>("overview");
@@ -161,22 +164,16 @@ export default function GymsSlugClient({ slug }: { slug: string }) {
 
   useEffect(() => {
     if (!gym) return;
-    try {
-      const raw = localStorage.getItem("disciplin_saved_gyms_v1");
-      const ids = raw ? (JSON.parse(raw) as string[]) : [];
-      setSaved(ids.includes(gym.slug));
-    } catch {}
-  }, [gym?.slug]);
+    const ids = readUserJson<string[]>(user?.id, "disciplin_saved_gyms_v1") ?? [];
+    queueMicrotask(() => setSaved(ids.includes(gym.slug)));
+  }, [gym, user?.id]);
 
   function toggleSaved() {
     if (!gym) return;
-    try {
-      const raw = localStorage.getItem("disciplin_saved_gyms_v1");
-      const ids = raw ? (JSON.parse(raw) as string[]) : [];
-      const next = saved ? ids.filter((x) => x !== gym.slug) : Array.from(new Set([gym.slug, ...ids]));
-      localStorage.setItem("disciplin_saved_gyms_v1", JSON.stringify(next));
-      setSaved(!saved);
-    } catch {}
+    const ids = readUserJson<string[]>(user?.id, "disciplin_saved_gyms_v1") ?? [];
+    const next = saved ? ids.filter((x) => x !== gym.slug) : Array.from(new Set([gym.slug, ...ids]));
+    writeUserJson(user?.id, "disciplin_saved_gyms_v1", next);
+    setSaved(!saved);
   }
 
   const avgRating = useMemo(() => {

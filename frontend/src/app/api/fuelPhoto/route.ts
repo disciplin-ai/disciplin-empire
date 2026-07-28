@@ -4,6 +4,9 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type { FuelOutput } from "@/lib/fuelTypes";
+import { ImageValidationError, validateImageFile } from "@/lib/security/imageValidation";
+import { acquireExpensiveRequest, requestIp, type RateLimitLease } from "@/lib/security/rateLimit";
+import { logServerError, rateLimited, requestId, safeServerError, unauthorized } from "@/lib/security/responses";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -12,9 +15,9 @@ export const dynamic = "force-dynamic";
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 const FormSchema = z.object({
-  ingredients: z.string().min(1, "Missing meal text (ingredients)"),
-  fighter: z.string().optional(),
-  training: z.string().optional(),
+  ingredients: z.string().min(1, "Missing meal text (ingredients)").max(5_000),
+  fighter: z.string().max(10_000).optional(),
+  training: z.string().max(10_000).optional(),
 });
 
 function schemaForFuelOutput() {
@@ -131,14 +134,23 @@ function safeJsonParse(value?: string) {
 }
 
 export async function POST(req: Request) {
+  const id = requestId(req);
+  let lease: Extract<RateLimitLease, { ok: true }> | null = null;
   try {
     const sb = await createSupabaseServerClient();
     const { data: auth } = await sb.auth.getUser();
     const user = auth?.user;
 
     if (!user) {
-      return NextResponse.json({ ok: false, error: "Not authenticated." }, { status: 401 });
+      return unauthorized();
     }
+    const acquired = acquireExpensiveRequest({
+      route: "fuel-photo",
+      userId: user.id,
+      ip: requestIp(req),
+    });
+    if (!acquired.ok) return rateLimited(acquired);
+    lease = acquired;
 
     const form = await req.formData();
     const image = form.get("image");
@@ -153,7 +165,7 @@ export async function POST(req: Request) {
     });
 
     if (!parsed.success) {
-      return NextResponse.json({ ok: false, error: parsed.error.message }, { status: 400 });
+      return NextResponse.json({ ok: false, error: "Invalid meal input." }, { status: 400 });
     }
 
     if (!(image instanceof File)) {
@@ -161,9 +173,8 @@ export async function POST(req: Request) {
     }
 
     const followupsId = crypto.randomUUID();
-    const buffer = Buffer.from(await image.arrayBuffer());
-    const mime = image.type || "image/webp";
-    const dataUrl = `data:${mime};base64,${buffer.toString("base64")}`;
+    const validatedImage = await validateImageFile(image);
+    const dataUrl = `data:${validatedImage.mimeType};base64,${validatedImage.base64}`;
     const prompt = buildPrompt(
       parsed.data.ingredients,
       safeJsonParse(parsed.data.fighter),
@@ -216,14 +227,12 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true, ...out });
   } catch (err: unknown) {
-    const msg =
-      err instanceof Error
-        ? err.message
-        : typeof err?.toString === "function"
-          ? err.toString()
-          : "FuelPhoto backend crashed.";
-
-    console.error("FuelPhoto crashed:", err);
-    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+    if (err instanceof ImageValidationError) {
+      return NextResponse.json({ ok: false, error: err.message }, { status: err.status });
+    }
+    logServerError("fuel-photo", id, err);
+    return safeServerError(id);
+  } finally {
+    lease?.release();
   }
 }

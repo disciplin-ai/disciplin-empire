@@ -1,4 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import {
+  ImageValidationError,
+  validateBase64Image,
+} from "@/lib/security/imageValidation";
+import {
+  acquireExpensiveRequest,
+  requestIp,
+  type RateLimitLease,
+} from "@/lib/security/rateLimit";
+import {
+  logServerError,
+  rateLimited,
+  requestId,
+  safeServerError,
+  unauthorized,
+} from "@/lib/security/responses";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -137,11 +154,24 @@ function parseJson(text: string) {
 }
 
 export async function POST(req: NextRequest) {
+  const id = requestId(req);
+  let lease: Extract<RateLimitLease, { ok: true }> | null = null;
   try {
+    const supabase = await createSupabaseServerClient();
+    const { data: auth } = await supabase.auth.getUser();
+    const user = auth.user;
+    if (!user) return unauthorized();
+
+    const acquired = acquireExpensiveRequest({
+      route: "vision-proof",
+      userId: user.id,
+      ip: requestIp(req),
+    });
+    if (!acquired.ok) return rateLimited(acquired);
+    lease = acquired;
+
     const body = await req.json().catch(() => null);
 
-    const fileBase64 = stripDataUrl(cleanText(body?.fileBase64));
-    const mimeType = cleanText(body?.mimeType || "image/png");
     const correction = cleanText(body?.correction);
     const fixNextRep = cleanText(body?.fixNextRep);
     const context = cleanText(body?.context);
@@ -153,21 +183,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!fileBase64 || !correction) {
+    if (!correction) {
       return NextResponse.json(
-        fallbackReject("Missing proof file or correction."),
-        { status: 200 }
+        { ok: false, error: "Missing correction." },
+        { status: 400 },
       );
     }
 
-    if (!mimeType.startsWith("image/")) {
+    if (correction.length > 2_000 || fixNextRep.length > 2_000 || context.length > 2_000) {
       return NextResponse.json(
-        fallbackReject(
-          "Video proof route is not enabled yet. Upload a clear image frame for V1 validation."
-        ),
-        { status: 200 }
+        { ok: false, error: "Proof context is too long." },
+        { status: 400 },
       );
     }
+
+    const image = validateBase64Image(
+      stripDataUrl(cleanText(body?.fileBase64)),
+      body?.mimeType,
+    );
+    const fileBase64 = image.base64;
+    const mimeType = image.mimeType;
 
     const systemPrompt = `
 You are Disciplin Proof Judge.
@@ -271,10 +306,8 @@ Judge the proof image. Be strict. If the correction is not clearly proven under 
     const data = await response.json();
 
     if (!response.ok) {
-      return NextResponse.json(
-        fallbackReject(data?.error?.message || "Proof model request failed."),
-        { status: 200 }
-      );
+      logServerError("sensei-vision-proof-upstream", id);
+      return safeServerError(id);
     }
 
     const rawText = extractOutputText(data);
@@ -288,12 +321,16 @@ Judge the proof image. Be strict. If the correction is not clearly proven under 
     }
 
     return NextResponse.json(normalizeResult(parsed), { status: 200 });
-  } catch (err: any) {
-    console.error("[sensei-vision-proof] route failed:", err);
-
-    return NextResponse.json(
-      fallbackReject(err?.message || "Server error during proof evaluation."),
-      { status: 200 }
-    );
+  } catch (err: unknown) {
+    if (err instanceof ImageValidationError) {
+      return NextResponse.json(
+        { ok: false, error: err.message },
+        { status: err.status },
+      );
+    }
+    logServerError("sensei-vision-proof", id, err);
+    return safeServerError(id);
+  } finally {
+    lease?.release();
   }
 }

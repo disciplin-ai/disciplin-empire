@@ -48,7 +48,7 @@ function scoreGym(gym: GymRow, distanceKm: number): number {
 export async function GET(req: NextRequest) {
   // ✅ Lazy init + env guard (prevents build-time crash)
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!url || !/^https?:\/\//.test(url)) {
     return new Response(JSON.stringify({ gyms: [], error: "Invalid SUPABASE URL" }), {
@@ -56,14 +56,16 @@ export async function GET(req: NextRequest) {
       headers: { "Content-Type": "application/json" },
     });
   }
-  if (!serviceKey) {
-    return new Response(JSON.stringify({ gyms: [], error: "Missing SUPABASE service key" }), {
-      status: 200,
+  if (!anonKey) {
+    return new Response(JSON.stringify({ gyms: [] }), {
+      status: 500,
       headers: { "Content-Type": "application/json" },
     });
   }
 
-  const supabase = createClient(url, serviceKey);
+  const supabase = createClient(url, anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
 
   const { searchParams } = new URL(req.url);
   const lat = parseFloat(searchParams.get("lat") || "");
@@ -82,7 +84,6 @@ export async function GET(req: NextRequest) {
     .eq("verified", true);
 
   if (error) {
-    console.error("[Gyms Near] Supabase error:", error);
     return new Response(JSON.stringify({ gyms: [] }), {
       status: 200,
       headers: { "Content-Type": "application/json" },

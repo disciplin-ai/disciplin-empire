@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { LogOut } from "lucide-react";
 import { useProfile } from "./ProfileProvider";
 
 function getUserLabel(args: {
@@ -15,7 +16,7 @@ function getUserLabel(args: {
 
   if (loading) {
     return {
-      label: "...",
+      label: "Your profile",
       href: "/profile",
       loading: true,
       signedIn: false,
@@ -32,9 +33,9 @@ function getUserLabel(args: {
     cleanedFullName ||
     cleanedMetaName ||
     cleanedEmail.split("@")[0] ||
-    "Guest";
+    "Sign in";
 
-  const signedIn = label !== "Guest";
+  const signedIn = label !== "Sign in";
 
   return {
     label,
@@ -44,7 +45,7 @@ function getUserLabel(args: {
   };
 }
 
-export default function UserChip() {
+export default function UserChip({ compact = false }: { compact?: boolean }) {
   const router = useRouter();
   const { user, profile, loading, signOut } = useProfile();
 
@@ -73,10 +74,22 @@ export default function UserChip() {
   };
 
   if (!state.signedIn) {
+    if (compact) {
+      return (
+        <Link
+          href={state.href}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/[0.10] bg-white/[0.045] text-sm font-semibold text-white/72 transition hover:border-white/[0.16] hover:bg-white/[0.075] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+          aria-label={state.loading ? "Loading user" : `Open ${state.label}`}
+        >
+          <span aria-hidden="true">{state.loading ? "·" : "→"}</span>
+        </Link>
+      );
+    }
+
     return (
       <Link
         href={state.href}
-        className="inline-flex min-w-[88px] items-center justify-center rounded-full border border-emerald-500/30 bg-slate-950/40 px-4 py-2 text-sm text-slate-100 transition hover:border-emerald-400/50 hover:bg-slate-900/50"
+        className="app-button-secondary min-h-9 min-w-[88px] px-3 text-xs"
         aria-label={state.loading ? "Loading user" : `Open ${state.label}`}
       >
         {state.label}
@@ -84,11 +97,36 @@ export default function UserChip() {
     );
   }
 
+  if (compact) {
+    const initial = state.label.trim().charAt(0).toLocaleUpperCase() || "A";
+
+    return (
+      <div className="flex items-center gap-1.5">
+        <Link
+          href={state.href}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-emerald-200/18 bg-emerald-300/[0.08] text-sm font-semibold text-emerald-100 transition hover:border-emerald-200/28 hover:bg-emerald-300/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+          aria-label={`Open ${state.label}`}
+          title={state.label}
+        >
+          <span aria-hidden="true">{initial}</span>
+        </Link>
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white/48 transition hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+          aria-label="Log out"
+        >
+          <LogOut aria-hidden="true" className="h-[18px] w-[18px]" strokeWidth={1.8} />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-center gap-2">
       <Link
         href={state.href}
-        className="inline-flex min-w-[88px] items-center justify-center rounded-full border border-emerald-500/30 bg-slate-950/40 px-4 py-2 text-sm text-slate-100 transition hover:border-emerald-400/50 hover:bg-slate-900/50"
+        className="app-button-secondary min-h-9 min-w-[88px] max-w-36 truncate px-3 text-xs"
         aria-label={`Open ${state.label}`}
       >
         {state.label}
@@ -97,7 +135,7 @@ export default function UserChip() {
       <button
         type="button"
         onClick={handleLogout}
-        className="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/80 transition hover:bg-white/10 hover:text-white"
+        className="app-button-quiet min-h-9 px-2.5 text-xs"
       >
         Log out
       </button>

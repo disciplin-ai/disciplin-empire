@@ -9,6 +9,7 @@ import {
   type FighterReport,
   type ReportFinding,
 } from "@/lib/report/buildFighterReport";
+import { readUserJson } from "@/lib/userScopedStorage";
 
 type VisionFinding = {
   id?: string;
@@ -22,16 +23,6 @@ type VisionAnalysis = {
   clipLabel?: string;
   findings?: VisionFinding[];
 };
-
-function readJson<T>(key: string): T | null {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
 
 function buildShareText(report: FighterReport) {
   return [
@@ -52,14 +43,13 @@ function buildShareText(report: FighterReport) {
 }
 
 export default function ReportPage() {
-  const { fighterContext } = useFighterContext();
+  const { user, fighterContext } = useFighterContext();
   const [vision, setVision] = useState<VisionAnalysis | null>(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    const latestVision = readJson<VisionAnalysis>("disciplin_latest_vision");
-    setVision(latestVision);
-  }, []);
+    queueMicrotask(() => setVision(readUserJson<VisionAnalysis>(user?.id, "disciplin_latest_vision")));
+  }, [user?.id]);
 
   const report = useMemo(() => {
     const findings: ReportFinding[] = Array.isArray(vision?.findings)

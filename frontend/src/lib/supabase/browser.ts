@@ -13,9 +13,6 @@ export function getSupabaseBrowser(): SupabaseClient {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
-  console.log("[supabase browser] url found:", !!url);
-  console.log("[supabase browser] key found:", !!key);
-
   if (!url) {
     throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL.");
   }
@@ -26,7 +23,16 @@ export function getSupabaseBrowser(): SupabaseClient {
     );
   }
 
-  browserClient = createBrowserClient(url, key);
+  browserClient = createBrowserClient(url, key, {
+    cookieOptions: {
+      path: "/",
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      // Supabase's browser client refreshes the cookie, so this architecture
+      // cannot use HttpOnly until auth is moved fully behind a server BFF.
+      httpOnly: false,
+    },
+  });
 
   return browserClient;
 }

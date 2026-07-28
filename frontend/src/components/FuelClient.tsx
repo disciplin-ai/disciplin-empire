@@ -1,10 +1,13 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useProfile } from "../components/ProfileProvider";
 import FuelScreen, { FuelDecisionOutput } from "./FuelScreen";
 import type { FighterInput, TrainingInput } from "../lib/fuelTypes";
 import type { FuelHistoryPoint } from "../components/FuelScoreChart";
+import { mergeWorkflow } from "@/lib/workflow/contracts";
+import { writeUserJson } from "@/lib/userScopedStorage";
+import { useWorkflow } from "@/components/WorkflowProvider";
 
 type Mode = "text" | "photo";
 
@@ -21,7 +24,11 @@ async function postJson<T>(url: string, body: any): Promise<T> {
   const json = await res.json().catch(() => null);
 
   if (!res.ok || !json?.ok) {
-    throw new Error(json?.error || `Request failed (${res.status})`);
+    throw new Error(
+      res.status === 401
+        ? "Sign in to continue."
+        : "Fuel couldn’t complete this check. Try again.",
+    );
   }
 
   return json as T;
@@ -37,7 +44,11 @@ async function postForm<T>(url: string, fd: FormData): Promise<T> {
   const json = await res.json().catch(() => null);
 
   if (!res.ok || !json?.ok) {
-    throw new Error(json?.error || `Request failed (${res.status})`);
+    throw new Error(
+      res.status === 401
+        ? "Sign in to continue."
+        : "Fuel couldn’t complete this check. Try again.",
+    );
   }
 
   return json as T;
@@ -75,8 +86,10 @@ function toOptionalString(value: unknown): string | undefined {
   return str.length ? str : undefined;
 }
 
-export default function FuelClient() {
+export default function FuelClient({ embedded = false }: { embedded?: boolean } = {}) {
   const { user, loading: authLoading, profile } = useProfile();
+  const { authority } = useWorkflow();
+  const activeUserIdRef = useRef<string | null>(user?.id ?? null);
 
   const [mode, setMode] = useState<Mode>("text");
   const [mealText, setMealText] = useState("");
@@ -126,7 +139,7 @@ export default function FuelClient() {
   );
 
   const profileLine = useMemo(() => {
-    if (!profile) return "Using Profile: not set";
+    if (!profile) return "Profile not set";
 
     const cw =
       (profile as any).currentWeight ||
@@ -146,8 +159,8 @@ export default function FuelClient() {
     ].filter(Boolean);
 
     return parts.length
-      ? `Using Profile: ${parts.join(" · ")}`
-      : "Using Profile";
+      ? `Profile: ${parts.join(" · ")}`
+      : "Profile ready";
   }, [profile]);
 
   const nextMealTarget = useMemo(
@@ -157,9 +170,7 @@ export default function FuelClient() {
 
   function saveLatestFuel(result: FuelDecisionOutput) {
     try {
-      localStorage.setItem(
-        LATEST_FUEL_KEY,
-        JSON.stringify({
+      if (!writeUserJson(user?.id, LATEST_FUEL_KEY, {
           present: true,
           score: result.score,
           rating: result.rating,
@@ -169,10 +180,13 @@ export default function FuelClient() {
           next_steps: result.next_steps,
           report: result.report,
           savedAt: new Date().toISOString(),
-        })
-      );
+        })) return;
 
       window.dispatchEvent(new Event("disciplin:fuel-updated"));
+      const limits = Array.isArray(result.next_steps)
+        ? result.next_steps.map(String).filter(Boolean).slice(0, 3)
+        : result.impact ? [String(result.impact)] : [];
+      mergeWorkflow(user?.id, { fuelLimits: limits });
     } catch {
       // ignore local storage failure
     }
@@ -180,6 +194,7 @@ export default function FuelClient() {
 
   async function refreshHistory() {
     if (!user) return;
+    const requestUserId = user.id;
 
     try {
       setHistoryLoading(true);
@@ -192,7 +207,7 @@ export default function FuelClient() {
         }
       );
 
-      setHistory(h.points ?? []);
+      if (activeUserIdRef.current === requestUserId) setHistory(h.points ?? []);
     } catch {
       // ignore
     } finally {
@@ -201,14 +216,22 @@ export default function FuelClient() {
   }
 
   useEffect(() => {
+    activeUserIdRef.current = user?.id ?? null;
+    queueMicrotask(() => {
+      setOut(null);
+      setAnswers({});
+      setError(null);
+      setMealText("");
+      setPhoto(null);
+    });
     if (!user) {
-      setHistory([]);
+      queueMicrotask(() => setHistory([]));
       return;
     }
 
     refreshHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user?.id]);
 
   function setModeSafe(m: Mode) {
     setMode(m);
@@ -223,17 +246,18 @@ export default function FuelClient() {
     }
 
     if (!mealText.trim()) {
-      setError("Meal text is required.");
+      setError("Describe the meal first.");
       return;
     }
 
     if (mode === "photo" && !photo) {
-      setError("Add a meal photo or switch to Text only.");
+      setError("Add a meal photo or choose text only.");
       return;
     }
 
     setRunning(true);
     setError(null);
+    const requestUserId = user.id;
 
     try {
       if (mode === "photo" && photo) {
@@ -249,6 +273,7 @@ export default function FuelClient() {
         );
 
         const result = resp as any;
+        if (activeUserIdRef.current !== requestUserId) return;
         setOut(result);
         saveLatestFuel(result);
       } else {
@@ -263,6 +288,7 @@ export default function FuelClient() {
         );
 
         const result = resp as any;
+        if (activeUserIdRef.current !== requestUserId) return;
         setOut(result);
         saveLatestFuel(result);
       }
@@ -270,7 +296,7 @@ export default function FuelClient() {
       setAnswers({});
       await refreshHistory();
     } catch (e: any) {
-      setError(e?.message ?? "Fuel failed.");
+      setError(e?.message ?? "Fuel couldn’t complete this check. Try again.");
     } finally {
       setRunning(false);
     }
@@ -278,17 +304,18 @@ export default function FuelClient() {
 
   async function refine() {
     if (!user) {
-      setError("Sign in to refine.");
+      setError("Sign in to continue.");
       return;
     }
 
     if (!out?.followups_id) {
-      setError("Generate a report first.");
+      setError("Complete the first check before adding details.");
       return;
     }
 
     setRunning(true);
     setError(null);
+    const requestUserId = user.id;
 
     try {
       const resp = await postJson<FuelDecisionOutput & { ok: true }>(
@@ -301,11 +328,12 @@ export default function FuelClient() {
       );
 
       const result = resp as any;
+      if (activeUserIdRef.current !== requestUserId) return;
       setOut(result);
       saveLatestFuel(result);
       await refreshHistory();
     } catch (e: any) {
-      setError(e?.message ?? "Fuel refine failed.");
+      setError(e?.message ?? "Fuel couldn’t update this check. Try again.");
     } finally {
       setRunning(false);
     }
@@ -325,10 +353,12 @@ export default function FuelClient() {
     setTimeOfTraining("");
   }
 
-  const statusPill = running ? "Working" : out ? "Updated" : "Idle";
+  const statusPill = running ? "Checking" : out ? "Updated" : "Ready";
 
   return (
     <FuelScreen
+      embedded={embedded}
+      authority={authority}
       authLoading={authLoading}
       hasUser={!!user}
       profileLine={profileLine}

@@ -7,6 +7,8 @@ import type {
   FuelRequest,
   FuelHistoryResponse,
 } from "@/lib/fuelTypes";
+import { acquireExpensiveRequest, requestIp, type RateLimitLease } from "@/lib/security/rateLimit";
+import { logServerError, rateLimited, requestId, safeServerError, unauthorized } from "@/lib/security/responses";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -893,16 +895,15 @@ function rowToFuelDecisionOutput(row: any): FuelDecisionOutput {
 }
 
 export async function POST(req: Request) {
+  const id = requestId(req);
+  let lease: Extract<RateLimitLease, { ok: true }> | null = null;
   try {
     const sb = await createSupabaseServerClient();
     const { data: auth } = await sb.auth.getUser();
     const user = auth?.user;
 
     if (!user) {
-      return NextResponse.json(
-        { ok: false, error: "Not authenticated." },
-        { status: 401 }
-      );
+      return unauthorized();
     }
 
     const body = (await req.json().catch(() => null)) as FuelRequest | null;
@@ -945,10 +946,8 @@ export async function POST(req: Request) {
   };
 });
       if (error) {
-        return NextResponse.json(
-          { ok: false, error: error.message },
-          { status: 500 }
-        );
+        logServerError("fuel-history", id, error);
+        return safeServerError(id);
       }
 const resp: FuelHistoryResponse = {
   ok: true,
@@ -958,6 +957,14 @@ const resp: FuelHistoryResponse = {
 return NextResponse.json(resp);
       return NextResponse.json(resp);
     }
+
+    const acquired = acquireExpensiveRequest({
+      route: "fuel",
+      userId: user.id,
+      ip: requestIp(req),
+    });
+    if (!acquired.ok) return rateLimited(acquired);
+    lease = acquired;
 
     if (body.mode === "refine") {
       const parsed = RefineSchema.safeParse(body);
@@ -1068,15 +1075,10 @@ return NextResponse.json(resp);
       ok: true,
       ...finalOut,
     });
-  } catch (err: any) {
-    console.error("Fuel crashed:", err);
-
-    return NextResponse.json(
-      {
-        ok: false,
-        error: err?.message || "Fuel backend crashed.",
-      },
-      { status: 500 }
-    );
+  } catch (err: unknown) {
+    logServerError("fuel", id, err);
+    return safeServerError(id);
+  } finally {
+    lease?.release();
   }
 }

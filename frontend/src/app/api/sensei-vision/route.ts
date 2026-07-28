@@ -1,5 +1,23 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import {
+  ImageValidationError,
+  validateBase64Image,
+} from "@/lib/security/imageValidation";
+import { IMAGE_LIMITS } from "@/lib/security/imagePolicy";
+import {
+  acquireExpensiveRequest,
+  requestIp,
+  type RateLimitLease,
+} from "@/lib/security/rateLimit";
+import {
+  logServerError,
+  rateLimited,
+  requestId,
+  safeServerError,
+  unauthorized,
+} from "@/lib/security/responses";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -548,7 +566,7 @@ TITLE RULES:
 - if title is incomplete, rewrite it shorter
 
 GOOD TITLE EXAMPLES:
-- Head too far outside
+- Head position changes before contact
 - Lost head position
 - Reaching from too far away
 - Kick leaves you stuck
@@ -736,11 +754,32 @@ function tryParseJson(text: string) {
 }
 
 export async function POST(req: Request) {
+  const id = requestId(req);
+  let lease: Extract<RateLimitLease, { ok: true }> | null = null;
   try {
+    const supabase = await createSupabaseServerClient();
+    const { data: auth } = await supabase.auth.getUser();
+    const user = auth.user;
+    if (!user) return unauthorized();
+
+    const contentLength = Number(req.headers.get("content-length") || 0);
+    if (contentLength > IMAGE_LIMITS.base64Characters + 1_000_000) {
+      return NextResponse.json(
+        { ok: false, error: "Image payload is too large." },
+        { status: 413 },
+      );
+    }
+
+    const acquired = acquireExpensiveRequest({
+      route: "vision",
+      userId: user.id,
+      ip: requestIp(req),
+    });
+    if (!acquired.ok) return rateLimited(acquired);
+    lease = acquired;
+
     const body = await req.json().catch(() => null);
 
-    const imageBase64 = cleanSentence(body?.imageBase64);
-    const mimeType = cleanSentence(body?.mimeType || "image/png");
     const clipLabel = cleanSentence(body?.clipLabel || "Frame upload");
     const context = cleanMultiline(body?.context || "");
     const sport = cleanSentence(body?.sport || "Unknown");
@@ -748,12 +787,19 @@ export async function POST(req: Request) {
 
     const skeletonReport = buildSkeletonReport(poseLandmarks);
 
-    if (!imageBase64) {
+    if (clipLabel.length > IMAGE_LIMITS.clipLabelCharacters ||
+        context.length > IMAGE_LIMITS.contextCharacters) {
       return NextResponse.json(
-        { ok: false, error: "Missing imageBase64." },
+        { ok: false, error: "Analysis context is too long." },
         { status: 400 }
       );
     }
+
+    const validatedImage = validateBase64Image(
+      body?.imageBase64,
+      body?.mimeType,
+    );
+    const { base64: imageBase64, mimeType } = validatedImage;
 
     if (!openai) {
       const fallback = buildFallbackAnalysis({
@@ -832,13 +878,16 @@ export async function POST(req: Request) {
       analysis,
       skeleton: skeletonReport,
     });
-  } catch (err: any) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: err?.message || "Sensei Vision failed to analyze the frame.",
-      },
-      { status: 500 }
-    );
+  } catch (err: unknown) {
+    if (err instanceof ImageValidationError) {
+      return NextResponse.json(
+        { ok: false, error: err.message },
+        { status: err.status },
+      );
+    }
+    logServerError("sensei-vision", id, err);
+    return safeServerError(id);
+  } finally {
+    lease?.release();
   }
 }

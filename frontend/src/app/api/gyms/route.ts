@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { logServerError, requestId, safeServerError } from "@/lib/security/responses";
 
 export const dynamic = "force-dynamic";
 
@@ -19,11 +20,13 @@ function getSupabaseServerClient() {
 }
 
 export async function GET(req: NextRequest) {
+  const id = requestId(req);
   try {
     const supabase = getSupabaseServerClient();
 
     const { searchParams } = new URL(req.url);
-    const q = searchParams.get("q")?.toLowerCase() ?? "";
+    const rawQuery = searchParams.get("q")?.toLowerCase().trim() ?? "";
+    const q = rawQuery.replace(/[^a-z0-9 '\-]/g, "").slice(0, 80);
     const discipline = searchParams.get("discipline");
     const verified = searchParams.get("verified");
 
@@ -46,20 +49,13 @@ export async function GET(req: NextRequest) {
     const { data, error } = await query.limit(200);
 
     if (error) {
-      console.error("Error fetching gyms:", error);
-      return NextResponse.json(
-        { error: "Failed to load gyms" },
-        { status: 500 }
-      );
+      logServerError("gyms-query", id);
+      return safeServerError(id);
     }
 
     return NextResponse.json({ gyms: data ?? [] });
   } catch (error) {
-    console.error("Gyms route setup error:", error);
-
-    return NextResponse.json(
-      { error: "Server configuration error" },
-      { status: 500 }
-    );
+    logServerError("gyms", id, error);
+    return safeServerError(id);
   }
 }

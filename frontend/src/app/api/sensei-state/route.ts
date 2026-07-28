@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/ssr";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { logServerError, requestId, safeServerError, unauthorized } from "@/lib/security/responses";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -214,34 +214,18 @@ function normalizeSession(input: any): SenseiSessionState {
 }
 
 async function getSupabase() {
-  const cookieStore = await cookies();
-
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) {
-          return cookieStore.get(name)?.value;
-        },
-        set() {},
-        remove() {},
-      },
-    }
-  );
+  return createSupabaseServerClient();
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const id = requestId(req);
   try {
     const supabase = await getSupabase();
     const { data: auth } = await supabase.auth.getUser();
     const user = auth?.user;
 
     if (!user) {
-      return NextResponse.json(
-        { ok: false, error: "Not authenticated." },
-        { status: 401 }
-      );
+      return unauthorized();
     }
 
     const { data, error } = await supabase
@@ -251,10 +235,8 @@ export async function GET() {
       .maybeSingle();
 
     if (error) {
-      return NextResponse.json(
-        { ok: false, error: error.message },
-        { status: 500 }
-      );
+      logServerError("sensei-state-read", id);
+      return safeServerError(id);
     }
 
     if (!data) {
@@ -292,25 +274,21 @@ export async function GET() {
         }),
       },
     });
-  } catch (err: any) {
-    return NextResponse.json(
-      { ok: false, error: err?.message || "Failed to load Sensei state." },
-      { status: 500 }
-    );
+  } catch (err: unknown) {
+    logServerError("sensei-state-read", id, err);
+    return safeServerError(id);
   }
 }
 
 export async function POST(req: Request) {
+  const id = requestId(req);
   try {
     const supabase = await getSupabase();
     const { data: auth } = await supabase.auth.getUser();
     const user = auth?.user;
 
     if (!user) {
-      return NextResponse.json(
-        { ok: false, error: "Not authenticated." },
-        { status: 401 }
-      );
+      return unauthorized();
     }
 
     const body = await req.json().catch(() => ({}));
@@ -339,17 +317,13 @@ export async function POST(req: Request) {
       .upsert(payload, { onConflict: "user_id" });
 
     if (error) {
-      return NextResponse.json(
-        { ok: false, error: error.message },
-        { status: 500 }
-      );
+      logServerError("sensei-state-write", id);
+      return safeServerError(id);
     }
 
     return NextResponse.json({ ok: true });
-  } catch (err: any) {
-    return NextResponse.json(
-      { ok: false, error: err?.message || "Failed to save Sensei state." },
-      { status: 500 }
-    );
+  } catch (err: unknown) {
+    logServerError("sensei-state-write", id, err);
+    return safeServerError(id);
   }
 }
