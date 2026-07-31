@@ -22,6 +22,22 @@
   --shadow-surface: 0 18px 55px rgba(0,0,0,.24);
   --shadow-raised: 0 28px 90px rgba(0,0,0,.38);
   --surface-highlight: inset 0 1px 0 rgba(255,255,255,.045);
+
+  /*
+    Height of the fixed chrome stacked at the bottom of every in-app screen.
+    BottomNav sits on the floor; WorkflowDock floats above it at bottom-[78px]
+    and is 67px tall, so the occupied band reaches 145px before the safe area.
+    Screens previously each guessed their own bottom padding (96px or 128px),
+    both short of the band, which left real content sitting underneath the
+    dock and nav. Every screen now clears the same measured value.
+  */
+  --app-chrome-nav: 78px;
+  --app-chrome-dock: 67px;
+  --app-chrome-gap: 16px;
+  --app-chrome-bottom: calc(
+    var(--app-chrome-nav) + var(--app-chrome-dock) + var(--app-chrome-gap) +
+      env(safe-area-inset-bottom)
+  );
 }
 
 * {
@@ -250,6 +266,14 @@ select {
 
   .app-page-frame {
     min-height: calc(100dvh - 4rem - env(safe-area-inset-top));
+  }
+
+  /*
+    Applied to the scrolling root of each in-app screen so its own background
+    still paints behind the cleared band. Use this instead of an ad-hoc pb-*.
+  */
+  .app-chrome-pad {
+    padding-bottom: var(--app-chrome-bottom);
   }
 }
 

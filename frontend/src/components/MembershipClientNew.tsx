@@ -6,7 +6,7 @@ import { useProfile } from "./ProfileProvider";
 
 export default function MembershipClient(){
   const {profile}=useProfile();
-  return <main className="mx-auto max-w-5xl px-5 pb-32 pt-10 text-white sm:px-7">
+  return <main className="app-chrome-pad mx-auto max-w-5xl px-5 pt-10 text-white sm:px-7">
     <p className="app-label text-emerald-300/70">Membership</p>
     <h1 className="app-title-hero mt-3 max-w-3xl">Carry the workflow for as long as you need it.</h1>
     <p className="app-body-secondary mt-4 max-w-2xl">Prices come from the same configuration shown before signup. Billing is not connected, so no button claims to activate a subscription.</p>

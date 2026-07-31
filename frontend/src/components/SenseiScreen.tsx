@@ -2522,7 +2522,7 @@ export default function SenseiScreen({
         />
       )}
 
-      <div className={cn("relative mx-auto max-w-[1680px] px-4 pt-4", embedded ? "pb-5" : "pb-32 xl:px-6 xl:py-6")}>
+      <div className={cn("relative mx-auto max-w-[1680px] px-4 pt-4", embedded ? "pb-5" : "app-chrome-pad xl:px-6 xl:pt-6")}>
         <div className={cn(
           "grid gap-5 xl:items-start",
           embedded || (hasActiveCorrection && practicePhase !== "mission") ||

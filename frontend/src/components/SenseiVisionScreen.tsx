@@ -1927,7 +1927,7 @@ export default function SenseiVisionScreen({
       )}
     >
       <div className={cn("pointer-events-none inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(52,211,153,0.12),transparent_34%),radial-gradient(circle_at_78%_12%,rgba(168,85,247,0.10),transparent_32%),radial-gradient(circle_at_55%_95%,rgba(244,63,94,0.08),transparent_34%)]", embedded ? "absolute" : "fixed")} />
-      <div className={cn("relative mx-auto grid w-full max-w-[1760px] gap-5 px-4 pt-5 sm:px-5", embedded ? "grid-cols-1 pb-5" : "pb-24 lg:grid-cols-[360px_minmax(0,1fr)] xl:gap-6")}>
+      <div className={cn("relative mx-auto grid w-full max-w-[1760px] gap-5 px-4 pt-5 sm:px-5", embedded ? "grid-cols-1 pb-5" : "app-chrome-pad lg:grid-cols-[360px_minmax(0,1fr)] xl:gap-6")}>
         <aside className={cn(embedded ? "space-y-5" : "contents lg:sticky lg:top-20 lg:block lg:self-start lg:space-y-5")}>
           <div className="order-1 lg:order-none">
             <UploadPanel

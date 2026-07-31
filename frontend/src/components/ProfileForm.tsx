@@ -459,6 +459,13 @@ export default function ProfileForm() {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<FighterProfile>(EMPTY_PROFILE);
+  /*
+    Edits live in local state until Save. Switching sections keeps them, since
+    the sections only filter what is rendered from one form object — but
+    leaving the route discarded them silently. This tracks whether anything
+    is unsaved so the athlete is asked before their work is thrown away.
+  */
+  const [dirty, setDirty] = useState(false);
 
   const [activeConstraintsText, setActiveConstraintsText] = useState("");
   const [completedCorrectionsText, setCompletedCorrectionsText] = useState("");
@@ -499,6 +506,8 @@ export default function ProfileForm() {
     setFoodDislikesText(linesFromArray(p.foodDislikes));
     setFavoriteFoodsText(linesFromArray(p.favoriteFoods));
     setAvoidFoodsText(linesFromArray(p.avoidFoods));
+    // Rehydrating from the store is not an athlete edit.
+    setDirty(false);
   }, [profile]);
 
   function patch<K extends keyof FighterProfile>(
@@ -506,7 +515,54 @@ export default function ProfileForm() {
     value: FighterProfile[K]
   ) {
     setForm((prev) => ({ ...prev, [key]: value }));
+    setDirty(true);
   }
+
+  /*
+    Guard unsaved edits on the way out.
+
+    beforeunload covers reload, tab close and external links. In-app links are
+    client-side navigations that fire no such event, so anchor clicks are
+    intercepted during the capture phase — before the router sees them — and
+    the athlete is asked to confirm. Section switching is deliberately not
+    guarded: it preserves edits, so prompting there would be noise.
+  */
+  useEffect(() => {
+    if (!dirty) return;
+
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+
+    function onCapturedClick(event: MouseEvent) {
+      if (event.defaultPrevented || event.button !== 0) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+      const anchor = (event.target as HTMLElement | null)?.closest?.("a[href]");
+      if (!anchor) return;
+
+      const href = anchor.getAttribute("href") || "";
+      if (!href.startsWith("/") || anchor.getAttribute("target") === "_blank") return;
+      if (href.startsWith(window.location.pathname)) return;
+
+      const leave = window.confirm(
+        "You have unsaved profile changes. Leave without saving?"
+      );
+      if (!leave) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+    document.addEventListener("click", onCapturedClick, true);
+
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      document.removeEventListener("click", onCapturedClick, true);
+    };
+  }, [dirty]);
 
   async function handleSave() {
     setSaving(true);
@@ -547,6 +603,7 @@ export default function ProfileForm() {
       return;
     }
 
+    setDirty(false);
     setNotice("Profile saved.");
   }
 

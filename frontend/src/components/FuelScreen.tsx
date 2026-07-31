@@ -1412,7 +1412,7 @@ export default function FuelScreen({
         <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.022)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.014)_1px,transparent_1px)] bg-[size:48px_48px] opacity-20" />
       </div>
 
-      <div className={cn("relative mx-auto max-w-[1180px] px-4 py-6", embedded ? "pb-5" : "pb-24")}>
+      <div className={cn("relative mx-auto max-w-[1180px] px-4 pt-6", embedded ? "pb-5" : "app-chrome-pad")}>
         <div className="space-y-5">
           <MissionHero
             running={running}

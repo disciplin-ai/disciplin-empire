@@ -197,7 +197,7 @@ export default function ProfileClient({ embedded = false }: { embedded?: boolean
       badge={embedded ? undefined : "ATHLETE PROFILE"}
       title={embedded ? undefined : "Your profile"}
       subtitle={embedded ? undefined : "Your sport, experience, limits, and coaching context."}
-      className="pb-24"
+      className="app-chrome-pad"
     >
       <section className="rounded-[22px] border border-white/[0.08] bg-white/[0.025] px-5 py-4">
         <p className="app-label text-emerald-200/65">Coaching authority</p>

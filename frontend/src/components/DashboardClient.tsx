@@ -1165,7 +1165,7 @@ export default function DashboardClient() {
       <main
         aria-busy="true"
         aria-label="Loading today's mission"
-        className="min-h-[calc(100vh-72px)] bg-[#05080d] px-3 pb-32 pt-3 text-white sm:px-5 sm:pt-5"
+        className="app-chrome-pad min-h-[calc(100vh-72px)] bg-[#05080d] px-3 pt-3 text-white sm:px-5 sm:pt-5"
       >
         <div className="mx-auto max-w-5xl space-y-3">
           <div className="min-h-[430px] rounded-[24px] border border-white/[0.07] bg-[#0b1119] p-5 sm:p-6">
@@ -1188,7 +1188,7 @@ export default function DashboardClient() {
       variants={pageMotion}
       initial={reduceMotion ? false : "hidden"}
       animate="show"
-      className="min-h-[calc(100vh-72px)] bg-[radial-gradient(ellipse_68%_36%_at_50%_-12%,rgba(52,211,153,.045),transparent_72%),#05080d] px-3 pb-32 pt-3 text-white sm:px-5 sm:pt-5"
+      className="app-chrome-pad min-h-[calc(100vh-72px)] bg-[radial-gradient(ellipse_68%_36%_at_50%_-12%,rgba(52,211,153,.045),transparent_72%),#05080d] px-3 pt-3 text-white sm:px-5 sm:pt-5"
     >
       <div className="mx-auto max-w-5xl space-y-3">
         <AnimatePresence initial={false}>
