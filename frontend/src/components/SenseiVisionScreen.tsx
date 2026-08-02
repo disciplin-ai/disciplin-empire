@@ -906,7 +906,7 @@ async function handleUploadFile(file: File | null) {
             type="button"
             onClick={onAnalyze}
             disabled={running || !previewUrl}
-            className="rounded-full bg-emerald-400 px-4 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#03130d] shadow-[0_14px_34px_rgba(16,185,129,0.18)] transition hover:scale-[1.01] hover:bg-emerald-300 disabled:opacity-45"
+            className="app-button-accent"
           >
             {running ? "Reading..." : correctionLocked ? "Analyze again" : "Analyze frame"}
           </button>
@@ -915,7 +915,7 @@ async function handleUploadFile(file: File | null) {
             type="button"
             onClick={onReset}
             disabled={running}
-            className="rounded-full bg-white/[0.07] px-4 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-white/48 ring-1 ring-white/[0.08] transition hover:bg-white/[0.1] hover:text-white/76 disabled:opacity-40"
+            className="app-button-secondary"
           >
             Reset
           </button>
@@ -1927,7 +1927,7 @@ export default function SenseiVisionScreen({
       )}
     >
       <div className={cn("pointer-events-none inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(52,211,153,0.12),transparent_34%),radial-gradient(circle_at_78%_12%,rgba(168,85,247,0.10),transparent_32%),radial-gradient(circle_at_55%_95%,rgba(244,63,94,0.08),transparent_34%)]", embedded ? "absolute" : "fixed")} />
-      <div className={cn("relative mx-auto grid w-full max-w-[1760px] gap-5 px-4 pt-5 sm:px-5", embedded ? "grid-cols-1 pb-5" : "app-chrome-pad lg:grid-cols-[360px_minmax(0,1fr)] xl:gap-6")}>
+      <div className={cn("relative mx-auto grid w-full max-w-[1180px] gap-5 px-4 pt-5 sm:px-5", embedded ? "grid-cols-1 pb-5" : "app-chrome-pad lg:grid-cols-[360px_minmax(0,1fr)] xl:gap-6")}>
         <aside className={cn(embedded ? "space-y-5" : "contents lg:sticky lg:top-20 lg:block lg:self-start lg:space-y-5")}>
           <div className="order-1 lg:order-none">
             <UploadPanel

@@ -67,8 +67,6 @@ export type FuelDecisionOutput = FuelOutput & FuelDecisionLayer;
 type FuelScreenProps = {
   embedded?: boolean;
   authority: AuthorityView;
-  authLoading: boolean;
-  hasUser: boolean;
   profileLine: string;
   purpose: string;
   session: string;
@@ -929,7 +927,12 @@ function Modules({
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-4">
               <h2 className="text-lg font-semibold text-white">Body check</h2>
-              <p className="text-xs font-semibold text-white/46">{progress.completed}/{progress.total}</p>
+              {/*
+                "1/6" beside numbered chips read as "you are on step 1", while
+                a later chip already showed a tick — two contradictory claims
+                about the same state. Naming the unit removes the ambiguity.
+              */}
+              <p className="text-xs font-semibold text-white/46">{progress.completed} of {progress.total} answered</p>
             </div>
             <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
               <div className="h-full rounded-full bg-emerald-400 transition-all duration-200 ease-app" style={{ width: `${progressPercent}%` }} />
@@ -1379,8 +1382,6 @@ function Select({
 export default function FuelScreen({
   embedded = false,
   authority,
-  authLoading,
-  hasUser,
   sessionValue,
   setSession,
   intensity,
@@ -1429,19 +1430,13 @@ export default function FuelScreen({
             authority={authority}
           />
 
-          {!authLoading && !hasUser && (
-            <Surface className="border-rose-400/20 bg-rose-400/[0.05] p-4">
-              <p className="text-sm font-medium leading-6 text-rose-100/80">
-                Sign in to use Fuel.{" "}
-                <Link
-                  href="/auth/login"
-                  className="font-semibold text-rose-200 underline decoration-rose-400/40 underline-offset-4"
-                >
-                  Login
-                </Link>
-              </p>
-            </Surface>
-          )}
+          {/*
+            A "Sign in to use Fuel" banner used to sit here. Every route under
+            (app) is already behind AppAccessGate, which redirects an
+            unauthenticated athlete before this screen renders, so the banner
+            could only ever appear beside the athlete's own name in the navbar
+            — telling them to sign in while signed in.
+          */}
 
           {error && (
             <Surface className="border-rose-400/20 bg-rose-400/[0.05] p-4">

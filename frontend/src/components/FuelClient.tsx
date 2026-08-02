@@ -359,8 +359,6 @@ export default function FuelClient({ embedded = false }: { embedded?: boolean } 
     <FuelScreen
       embedded={embedded}
       authority={authority}
-      authLoading={authLoading}
-      hasUser={!!user}
       profileLine={profileLine}
       purpose={purpose}
       session={session}

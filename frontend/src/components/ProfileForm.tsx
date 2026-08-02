@@ -12,7 +12,6 @@ type SectionKey =
   | "identity"
   | "limits"
   | "style"
-  | "focus"
   | "history"
   | "coach"
   | "camp"
@@ -26,7 +25,6 @@ const SECTIONS: Array<{
   { key: "identity", label: "Identity", symbol: "ID" },
   { key: "limits", label: "Limits", symbol: "!" },
   { key: "style", label: "Style", symbol: "AR" },
-  { key: "focus", label: "Focus", symbol: "LK" },
   { key: "history", label: "History", symbol: "HX" },
   { key: "coach", label: "Coach", symbol: "VO" },
   { key: "camp", label: "Camp", symbol: "GY" },
@@ -171,9 +169,12 @@ function linesFromArray(value?: string[]) {
   return Array.isArray(value) ? value.join("\n") : "";
 }
 
+const NOT_SET = "Not set";
+const NOT_LOGGED = "Not logged";
+
 function compact(
   value?: string | number | null,
-  fallback = "Not set"
+  fallback = NOT_SET
 ) {
   const text = textValue(value).trim();
   return text.length ? text : fallback;
@@ -182,7 +183,7 @@ function compact(
 function kg(value?: number) {
   return typeof value === "number" && Number.isFinite(value)
     ? `${value} kg`
-    : "Not logged";
+    : NOT_LOGGED;
 }
 
 function daysUntil(dateStr?: string | null) {
@@ -305,20 +306,44 @@ function Cell({
   children?: React.ReactNode;
   tone?: "emerald" | "amber" | "rose" | "cyan" | "violet" | "gold";
 }) {
+  /*
+    An empty field is not news. Rendering "Not set" in the same bold white as
+    a real answer made a new profile read as a wall of confident statements
+    about nothing. Absence now recedes, and where the athlete can actually
+    act — a cell with its own input below it — it offers "Add" instead of
+    reporting the gap back at them.
+  */
+  const isUnset = value === NOT_SET || value === NOT_LOGGED;
+  const actionable = isUnset && Boolean(children);
+
   return (
     <div className="rounded-[20px] border border-white/[0.07] bg-black/24 px-4 py-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          {tone ? <ToneDot tone={tone} /> : null}
+          {tone && !isUnset ? <ToneDot tone={tone} /> : null}
 
           <div className="truncate text-[12px] font-semibold text-white/52">
             {label}
           </div>
         </div>
 
-        {value ? (
-          <div className="truncate text-right text-sm font-semibold text-white">
-            {value}
+        {/*
+          When the cell carries its own input, that input already shows the
+          value — printing it in the header too stated the same answer twice,
+          a few pixels apart, and only the lower copy could be changed. The
+          header now speaks only for read-only cells, or to invite a first
+          entry where the field is still empty.
+        */}
+        {value && (!children || isUnset) ? (
+          <div
+            className={cn(
+              "truncate text-right text-sm",
+              isUnset
+                ? cn("font-medium", actionable ? "text-emerald-200/60" : "text-white/30")
+                : "font-semibold text-white"
+            )}
+          >
+            {actionable ? "Add" : value}
           </div>
         ) : null}
       </div>
@@ -624,82 +649,38 @@ export default function ProfileForm() {
     <div className="space-y-4">
       <section className="overflow-hidden rounded-[24px] border border-white/[0.08] bg-[radial-gradient(circle_at_18%_0%,rgba(52,211,153,0.12),transparent_34%),radial-gradient(circle_at_84%_8%,rgba(250,204,21,0.08),transparent_32%),linear-gradient(145deg,rgba(16,30,52,0.96),rgba(3,10,22,0.98)_58%,rgba(2,8,16,1))] shadow-[0_20px_70px_rgba(0,0,0,0.32)]">
         <div className="p-5 md:p-7">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap gap-2">
-              <Chip tone={form.currentFocus ? "gold" : "amber"}>
-                {form.currentFocus ? "Focus set" : "Focus not set"}
-              </Chip>
+          {/*
+            The hero states who the athlete is. It used to also carry a
+            four-cell panel repeating Current focus, Phase, Readiness and
+            Fight — all of which the sections below own and edit — so the most
+            prominent block on the page was four read-only restatements that
+            read "Not set / Not set / No date" on a new profile. Chips now
+            appear only when they carry a real value, so absence is quiet
+            rather than announced.
+          */}
+          <div className="min-w-0">
+            <h2 className="text-[clamp(2rem,5vw,2.75rem)] font-semibold leading-none tracking-[-0.04em] text-white">
+              {compact(form.name, "Unnamed athlete")}
+            </h2>
 
-              <Chip
-                tone={
-                  activeConstraintsText.trim()
-                    ? "rose"
-                    : "neutral"
-                }
-              >
-                {activeConstraintsText.trim()
-                  ? "Restrictions set"
-                  : "No restrictions"}
-              </Chip>
-            </div>
-          </div>
+            <div className="mt-5 flex flex-wrap gap-2">
+              {form.baseArt ? <Chip tone="emerald">{form.baseArt}</Chip> : null}
 
-          <div className="mt-7 grid gap-6 lg:grid-cols-[1fr_320px]">
-            <div className="min-w-0">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.3em] text-white/42">
-                Athlete profile
-              </div>
+              {form.fighterArchetype ? (
+                <Chip tone="cyan">{form.fighterArchetype}</Chip>
+              ) : null}
 
-              <h1 className="mt-3 text-[clamp(2.25rem,6vw,3.5rem)] font-semibold leading-none tracking-[-0.04em] text-white">
-                {compact(form.name, "Unnamed athlete")}
-              </h1>
+              {form.coachingStyle ? (
+                <Chip tone="violet">{form.coachingStyle}</Chip>
+              ) : null}
 
-              <div className="mt-5 flex flex-wrap gap-2">
-                <Chip tone="emerald">
-                  {compact(form.baseArt, "Primary art missing")}
-                </Chip>
+              {activeConstraintsText.trim() ? (
+                <Chip tone="rose">Restrictions set</Chip>
+              ) : null}
 
-                <Chip tone="cyan">
-                  {compact(
-                    form.fighterArchetype,
-                    "Style not set"
-                  )}
-                </Chip>
-
-                <Chip tone="violet">
-                  {compact(form.coachingStyle, "Direct")}
-                </Chip>
-              </div>
-            </div>
-
-            <div className="grid content-start gap-2">
-              <Cell
-                label="Current focus"
-                value={compact(form.currentFocus)}
-                tone="gold"
-              />
-
-              <Cell
-                label="Phase"
-                value={compact(form.currentPhase)}
-                tone="emerald"
-              />
-
-              <Cell
-                label="Readiness"
-                value={compact(form.readiness)}
-                tone="amber"
-              />
-
-              <Cell
-                label="Fight"
-                value={
-                  daysRemaining !== null
-                    ? `${daysRemaining} days`
-                    : compact(form.fightDate, "No date")
-                }
-                tone="rose"
-              />
+              {daysRemaining !== null ? (
+                <Chip tone="amber">{daysRemaining} days to fight</Chip>
+              ) : null}
             </div>
           </div>
         </div>
@@ -975,7 +956,8 @@ export default function ProfileForm() {
         </IOSPanel>
       )}
 
-      {section === "focus" && (
+      {/* Merged into Camp: an eighth tab did not earn its place. */}
+      {section === "camp" && (
         <IOSPanel
           title="Current focus"
           label="One active target"

@@ -1,139 +1,24 @@
-"use client";
+import { notFound } from "next/navigation";
+import ReportClient from "./ReportClient";
 
-import React, { useEffect, useMemo, useState } from "react";
-import AppShell from "@/components/AppShell";
-import FighterReportCard from "@/components/FighterReportCard";
-import { useFighterContext } from "@/hooks/useFighterContext";
-import {
-  buildFighterReport,
-  type FighterReport,
-  type ReportFinding,
-} from "@/lib/report/buildFighterReport";
-import { readUserJson } from "@/lib/userScopedStorage";
+// Opt out of prerendering so notFound() can set a real 404 status: this route
+// sits inside the (app) Suspense boundary, which otherwise flushes 200 first.
+export const dynamic = "force-dynamic";
 
-type VisionFinding = {
-  id?: string;
-  title: string;
-  detail: string;
-  severity: "LOW" | "MEDIUM" | "HIGH";
-};
+/*
+  The fighter report presents Striking IQ, Defensive Awareness, Wrestling
+  Chains and Cardio Pace as if they were measurements. They are not: each
+  begins at a hardcoded constant (76, 74, 80, 71) and is nudged by keyword
+  matches against free-text profile fields. A wrestler who has never recorded
+  a strike still scores 76 for striking. The screen also authors a "Next
+  directive", which is a coaching decision that belongs to the coach alone.
 
-type VisionAnalysis = {
-  analysis_id?: string;
-  clipLabel?: string;
-  findings?: VisionFinding[];
-};
-
-function buildShareText(report: FighterReport) {
-  return [
-    "DISCIPLIN FIGHTER REPORT",
-    "",
-    `${report.athleteName}`,
-    `${report.styleLabel} · ${report.baseArtLabel}`,
-    "",
-    `Striking IQ: ${report.scores.strikingIQ}`,
-    `Defensive Awareness: ${report.scores.defensiveAwareness}`,
-    `Wrestling Chains: ${report.scores.wrestlingChains}`,
-    `Cardio Pace: ${report.scores.cardioPace}`,
-    "",
-    `Main Mistake: ${report.mainMistake}`,
-    `Key Correction: ${report.keyCorrection}`,
-    `Next Directive: ${report.nextDirective}`,
-  ].join("\n");
-}
-
+  Until those numbers are derived from real evidence, the screen must not
+  reach an athlete, a coach, or anyone evaluating Disciplin. It stays
+  available in development so the work can continue.
+*/
 export default function ReportPage() {
-  const { user, fighterContext } = useFighterContext();
-  const [vision, setVision] = useState<VisionAnalysis | null>(null);
-  const [copied, setCopied] = useState(false);
+  if (process.env.NODE_ENV === "production") notFound();
 
-  useEffect(() => {
-    queueMicrotask(() => setVision(readUserJson<VisionAnalysis>(user?.id, "disciplin_latest_vision")));
-  }, [user?.id]);
-
-  const report = useMemo(() => {
-    const findings: ReportFinding[] = Array.isArray(vision?.findings)
-      ? vision.findings.map((item) => ({
-          id: item.id,
-          title: item.title,
-          detail: item.detail,
-          severity: item.severity,
-        }))
-      : [];
-
-    return buildFighterReport({
-      fighterName: fighterContext.identity.name,
-      baseArt: fighterContext.style.baseArt,
-      stance: fighterContext.style.stance,
-      secondaryArts: fighterContext.style.secondaryArts,
-      paceStyle: fighterContext.style.paceStyle,
-      pressurePreference: fighterContext.style.pressurePreference,
-      strengths: fighterContext.style.strengths,
-      weaknesses: fighterContext.style.weaknesses,
-      currentWeight: fighterContext.identity.currentWeight,
-      targetWeight: fighterContext.identity.targetWeight,
-      fightDate: fighterContext.camp.fightDate,
-      findings,
-    });
-  }, [fighterContext, vision]);
-
-  async function handleShare() {
-    const text = buildShareText(report);
-
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: "Disciplin Fighter Report",
-          text,
-        });
-        return;
-      } catch {
-        // fall through to clipboard
-      }
-    }
-
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1800);
-  }
-
-  return (
-    <AppShell
-      badge="REPORT"
-      title="Fighter report card"
-      subtitle="Shareable breakdown generated from your profile and latest Vision analysis."
-      right={
-        <button
-          type="button"
-          onClick={handleShare}
-          className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-100 hover:bg-emerald-500/15"
-        >
-          {copied ? "Copied" : "Share report"}
-        </button>
-      }
-    >
-      <FighterReportCard report={report} />
-
-      <div className="rounded-2xl border border-slate-800/60 bg-slate-950/25 p-5 text-sm text-slate-300/80">
-        <div className="text-sm font-semibold text-slate-50">
-          How this is calculated
-        </div>
-
-        <div className="mt-3 space-y-2">
-          <p>
-            The report uses your fighter profile plus the latest saved Sensei
-            Vision findings.
-          </p>
-          <p>
-            Higher-severity technical mistakes lower the relevant scores, while
-            your base art, style, and strengths shape the final profile.
-          </p>
-          <p>
-            This is the first MVP version. Later it should compare weekly
-            reports and show trend movement over time.
-          </p>
-        </div>
-      </div>
-    </AppShell>
-  );
+  return <ReportClient />;
 }

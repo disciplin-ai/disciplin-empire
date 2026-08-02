@@ -538,15 +538,13 @@ function TopBar({
       className="sticky top-0 z-30 border-b border-white/[0.07] bg-[#07111f]/82 px-4 pt-3 backdrop-blur-2xl"
       style={{ paddingTop: "max(0.75rem, env(safe-area-inset-top))" }}
     >
-      <div className="mx-auto flex max-w-[1680px] items-center justify-between gap-3 pb-3">
-        <div className="min-w-0">
-          <div className="sensei-label text-[11px] font-semibold text-white/42">
-            DISCIPLIN
-          </div>
-          <div className="truncate text-[22px] font-extrabold tracking-normal text-white">
-            Sensei
-          </div>
-        </div>
+      <div className="mx-auto flex max-w-[1180px] items-center justify-between gap-3 pb-3">
+        {/*
+          The global Navbar already renders "DISCIPLIN | Sensei" directly
+          above this bar, so repeating it here gave the screen two identical
+          headers ~60px apart. This bar keeps its status indicators only.
+        */}
+        <div className="min-w-0" />
 
         <div className="flex items-center gap-2">
           <AnimatePresence>
@@ -2522,7 +2520,7 @@ export default function SenseiScreen({
         />
       )}
 
-      <div className={cn("relative mx-auto max-w-[1680px] px-4 pt-4", embedded ? "pb-5" : "app-chrome-pad xl:px-6 xl:pt-6")}>
+      <div className={cn("relative mx-auto max-w-[1180px] px-4 pt-4", embedded ? "pb-5" : "app-chrome-pad xl:px-6 xl:pt-6")}>
         <div className={cn(
           "grid gap-5 xl:items-start",
           embedded || (hasActiveCorrection && practicePhase !== "mission") ||

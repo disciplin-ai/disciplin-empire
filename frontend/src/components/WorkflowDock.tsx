@@ -23,7 +23,19 @@ export default function WorkflowDock() {
   const [expanded, setExpanded] = useState(false);
   const scrollBeforeAction = useRef({ x: 0, y: 0 });
   const reduceMotion = useReducedMotion();
-  if (!ready || pathname === "/dashboard") return null;
+  /*
+    Screens that already state today's workflow in their own content, and
+    offer the same primary action there. Dashboard was always excluded for
+    this reason; Sensei and Profile need the same treatment. On Sensei the
+    dock made "No coach connected" appear four times on one screen, next to a
+    second, identical "Connect coach" button.
+  */
+  const screenOwnsWorkflowStatus =
+    pathname === "/dashboard" ||
+    pathname === "/sensei" ||
+    pathname === "/profile";
+
+  if (!ready || screenOwnsWorkflowStatus) return null;
   const hrefForAction: Record<AuthorityAction, string> = {
     RECORD_COACH_CORRECTION: "/sensei",
     PREPARE_COACH_REVIEW: "/sensei-vision",
