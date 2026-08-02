@@ -4,7 +4,6 @@ import React from "react";
 import Link from "next/link";
 import AppShell from "./AppShell";
 import ProfileForm from "./ProfileForm";
-import { useWorkflow } from "./WorkflowProvider";
 import CoachConnectionCard from "./CoachConnectionCard";
 
 function LegalRow({
@@ -149,49 +148,6 @@ function LegalControlsSection() {
 }
 
 export default function ProfileClient({ embedded = false }: { embedded?: boolean } = {}) {
-  const { authority } = useWorkflow();
-  // This section answers one question: can coach-approved work exist right now?
-  // Connection status is the Coach connection card's question and is not
-  // restated here, so the two sections never describe the same state twice.
-  const coachingAuthority =
-    authority.authorityState === "COACH_BACKEND_UNAVAILABLE"
-      ? {
-          value: "Unconfirmed",
-          detail:
-            "No coach-approved work can be served until your connection is confirmed. What you record stays observation only.",
-        }
-      : authority.authorityState === "COACH_APPROVED_MISSION"
-        ? {
-            value: "Coach approved",
-            detail: "Your connected coach approved the current mission.",
-          }
-        : authority.authorityState === "HAS_COACH_PENDING_REVIEW"
-          ? {
-              value: "Awaiting review",
-              detail:
-                "Your coach is reviewing the recorded correction. Nothing is approved yet.",
-            }
-          : authority.authorityState === "COACH_INVITATION_PENDING"
-            ? {
-                value: "Athlete directed",
-                detail:
-                  "Your invited coach cannot approve work until they accept.",
-              }
-            : authority.authorityState === "ATHLETE_DIRECTED"
-              ? {
-                  value: "Athlete directed",
-                  detail: "Your work is recorded but is not coach approved.",
-                }
-              : authority.authorityState === "NO_COACH_CONNECTED"
-                ? {
-                    value: "Athlete directed",
-                    detail: "Nothing you record is coach approved yet.",
-                  }
-                : {
-                    value: "No approved mission",
-                    detail:
-                      "Your coach can approve work. Nothing is approved yet.",
-                  };
   return (
     <AppShell
       badge={embedded ? undefined : "ATHLETE PROFILE"}
@@ -199,15 +155,13 @@ export default function ProfileClient({ embedded = false }: { embedded?: boolean
       subtitle={embedded ? undefined : "Your sport, experience, limits, and coaching context."}
       className="app-chrome-pad"
     >
-      <section className="rounded-[22px] border border-white/[0.08] bg-white/[0.025] px-5 py-4">
-        <p className="app-label text-emerald-200/65">Coaching authority</p>
-        <p className="mt-2 text-base font-semibold text-white">
-          {coachingAuthority.value}
-        </p>
-        <p className="mt-1 text-sm leading-6 text-white/48">
-          {coachingAuthority.detail}
-        </p>
-      </section>
+      {/*
+        A "Coaching authority" card used to sit here, stating "Athlete
+        directed — nothing you record is coach approved yet". The provenance
+        marker on the athlete's own identity now says precisely that, in the
+        same words the rest of the app uses, and the card below owns the
+        connection itself. Three surfaces described one state; one does now.
+      */}
       <CoachConnectionCard />
       <ProfileForm />
       <LegalControlsSection />

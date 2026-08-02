@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import Provenance from "@/components/Provenance";
 import {
   useProfile,
   type CoachingStyle,
@@ -22,13 +23,13 @@ const SECTIONS: Array<{
   label: string;
   symbol: string;
 }> = [
-  { key: "identity", label: "Identity", symbol: "ID" },
-  { key: "limits", label: "Limits", symbol: "!" },
+  { key: "identity", label: "Athlete", symbol: "ID" },
+  { key: "limits", label: "Preparation & safety", symbol: "!" },
   { key: "style", label: "Style", symbol: "AR" },
   { key: "history", label: "History", symbol: "HX" },
-  { key: "coach", label: "Coach", symbol: "VO" },
-  { key: "camp", label: "Camp", symbol: "GY" },
-  { key: "readiness", label: "Ready", symbol: "RD" },
+  { key: "coach", label: "Coach connection", symbol: "VO" },
+  { key: "camp", label: "Training environment", symbol: "GY" },
+  { key: "readiness", label: "Competition context", symbol: "RD" },
 ];
 
 const BASE_ART_OPTIONS = [
@@ -662,6 +663,14 @@ export default function ProfileForm() {
             <h2 className="text-[clamp(2rem,5vw,2.75rem)] font-semibold leading-none tracking-[-0.04em] text-white">
               {compact(form.name, "Unnamed athlete")}
             </h2>
+
+            {/*
+              Everything on this screen is self-reported. Saying so once, at
+              the top, is what lets a coach read the rest without having to
+              guess which parts they can rely on — and it keeps Profile from
+              implying an authority it does not have.
+            */}
+            <Provenance kind="athlete_entered" className="mt-3" />
 
             <div className="mt-5 flex flex-wrap gap-2">
               {form.baseArt ? <Chip tone="emerald">{form.baseArt}</Chip> : null}

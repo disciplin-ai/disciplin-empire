@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useReducer, useState } from "react";
+import Provenance from "@/components/Provenance";
 import Link from "next/link";
 import {
   AnimatePresence,
@@ -1306,6 +1307,13 @@ export default function DashboardClient() {
                   <p className="mt-2 text-base font-semibold leading-6 text-white sm:text-lg">
                     {currentBlocker || missionCue}
                   </p>
+                  {/*
+                    The cue is the most consequential sentence in the product —
+                    the one thing the athlete carries into the session. It now
+                    says whose standard it is, so its authority is legible
+                    rather than assumed.
+                  */}
+                  <Provenance kind="coach_approved" className="mt-3" />
                 </motion.div>
               </AnimatePresence>
             ) : null}

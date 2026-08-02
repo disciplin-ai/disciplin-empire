@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import Provenance from "@/components/Provenance";
+import { provenanceForEvidence } from "@/lib/provenance/contracts";
 import { AnimatePresence, motion } from "framer-motion";
 import type { VisionAnalysis, VisionFinding } from "@/lib/senseiVisionTypes";
 import type { VisionReviewPackage } from "@/lib/visionGovernance";
@@ -947,23 +949,14 @@ function VisionReviewResult({ reviewPackage, embedded = false }: { reviewPackage
               .replace(/_/g, " ")}
             tone={reviewPackage.evidenceAssessment.canInfer ? "good" : "warn"}
           />
-          <Badge
-            label={
-              reviewPackage.evidenceAuthority === "COACH_APPROVED"
-                ? "Coach approved"
-                : reviewPackage.evidenceAuthority === "COACH_REVIEW_PENDING"
-                  ? "Coach review pending"
-                  : reviewPackage.evidenceAuthority === "ATHLETE_DIRECTED"
-                    ? "Athlete directed"
-                    : "Observation only"
-            }
-            tone={
-              reviewPackage.evidenceAuthority === "COACH_APPROVED"
-                ? "good"
-                : reviewPackage.evidenceAuthority === "COACH_REVIEW_PENDING"
-                  ? "warn"
-                  : "neutral"
-            }
+          {/*
+            Vision used to hand-roll these four labels and their tones. They
+            now come from the shared provenance vocabulary, so Vision, the
+            Dashboard and Profile can never describe the same standing in
+            different words.
+          */}
+          <Provenance
+            kind={provenanceForEvidence(reviewPackage.evidenceAuthority)}
           />
           {timestamp && <Badge label={timestamp} tone="neutral" />}
         </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Provenance from "@/components/Provenance";
 import Link from "next/link";
 import { useCoach } from "@/components/CoachProvider";
 import { useProfile } from "@/components/ProfileProvider";
@@ -125,6 +126,22 @@ export default function CoachConnectionCard() {
                 : "Connect your coach so they can review and approve the corrections you record."}
             </p>
           )}
+
+          {/*
+            States what standing the connection currently confers. A connected
+            coach can approve; an unaccepted invitation cannot yet, and saying
+            so prevents an athlete reading a pending invite as coverage.
+          */}
+          {!loading && !loadError && relationship ? (
+            <Provenance
+              kind={
+                relationship.status === "connected"
+                  ? "coach_entered"
+                  : "pending_coach_review"
+              }
+              className="mt-3"
+            />
+          ) : null}
         </div>
         {relationship?.status === "connected" ? (
           <Link href="/dashboard" className="app-button-secondary">Return to Dashboard</Link>
