@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { resolveReinforcement } from "@/lib/authority/reinforcement";
 import OpenAI from "openai";
 import {
   getLockState,
@@ -5142,7 +5143,7 @@ export async function POST(req: NextRequest) {
       activeRelationship.coach_user_id
       ? await supabase
           .from("mission_versions")
-          .select("correction_text, practice_task")
+          .select("correction_text, practice_task, coach_user_id, coach_display_name, approved_at")
           .eq("id", currentPointer.mission_version_id)
           .eq("athlete_user_id", user.id)
           .eq("relationship_id", currentPointer.relationship_id)
@@ -5152,14 +5153,31 @@ export async function POST(req: NextRequest) {
       logServerError("sensei-mission-read", id, missionError);
       return safeServerError(id);
     }
-    const serverCorrection = cleanText(approvedMission?.correction_text);
+    /*
+      One rule decides whether Sensei may reinforce anything, and it reads only
+      rows this route fetched itself. The decision is a pure function so the
+      boundary can be tested directly — see lib/authority/reinforcement.test.ts.
+    */
+    const reinforcement = resolveReinforcement(
+      currentPointer ?? null,
+      activeRelationship ?? null,
+      approvedMission ?? null
+    );
+
+    if (!reinforcement.mayReinforce) {
+      logServerError("sensei-reinforcement-refused", id, reinforcement.refusal);
+    }
+
+    const serverCorrection = reinforcement.mayReinforce
+      ? reinforcement.correction
+      : "";
     const connected = normalizeConnected({
       ...connectedInput,
       vision: {
         ...connectedInput.vision,
         present: Boolean(serverCorrection),
         correction: serverCorrection || null,
-        fix_next_rep: cleanText(approvedMission?.practice_task) || null,
+        fix_next_rep: reinforcement.mayReinforce ? reinforcement.practiceTask || null : null,
       },
       camp: {
         ...connectedInput.camp,

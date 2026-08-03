@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { recordEvidence } from "@/lib/evidence/server";
 import OpenAI from "openai";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
@@ -18,6 +19,16 @@ import {
   safeServerError,
   unauthorized,
 } from "@/lib/security/responses";
+
+// One place names the analyser, so the model recorded against an observation
+// is always the model that produced it.
+function uploaderDisplayName(user: { email?: string | null; user_metadata?: Record<string, unknown> | null }) {
+  const meta = user.user_metadata ?? {};
+  const named = typeof meta.name === "string" ? meta.name.trim() : "";
+  return named || user.email || "Athlete";
+}
+
+const VISION_MODEL = "gpt-5.1";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -831,7 +842,7 @@ export async function POST(req: Request) {
     });
 
     const resp = await openai.responses.create({
-      model: "gpt-5.1",
+      model: VISION_MODEL,
       input: [
         {
           role: "system",
@@ -877,10 +888,49 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, analysis: fallback });
     }
 
+    /*
+      Persist the footage and this reading of it. The client keeps its own copy
+      for now — the server is not yet the only source of truth — but from here
+      the evidence survives a cleared browser, a new device, and a coach
+      leaving.
+
+      A failure is reported, never swallowed. Telling the athlete their evidence
+      is safe when it is not would be the worst outcome available here.
+    */
+    const durable = await recordEvidence(supabase, {
+      athleteUserId: user.id,
+      bytes: Buffer.from(imageBase64, "base64"),
+      mimeType,
+      uploaderName: uploaderDisplayName(user),
+      uploaderRole: "athlete",
+      clientReportedAt: cleanSentence(body?.clientCapturedAt) || null,
+      observation: {
+        kind: "vision_model",
+        observerName: "Sensei Vision",
+        observerRole: "system",
+        model: VISION_MODEL,
+        modelVersion: VISION_MODEL,
+        claims: { clipLabel, sport, analysis, skeleton: skeletonReport },
+      },
+    });
+
+    if (!durable.ok) {
+      logServerError(`sensei-vision-evidence-${durable.stage}`, id, durable.error);
+    }
+
     return NextResponse.json({
       ok: true,
       analysis,
       skeleton: skeletonReport,
+      evidence: durable.ok
+        ? {
+            persisted: true,
+            assetId: durable.asset.id,
+            observationId: durable.observationId,
+            uploadedAt: durable.asset.uploaded_at,
+            reusedExistingAsset: durable.reused,
+          }
+        : { persisted: false, failedAt: durable.stage },
     });
   } catch (err: unknown) {
     if (err instanceof ImageValidationError) {
