@@ -3565,6 +3565,23 @@ const [posePreview, setPosePreview] = useState<any | null>(null);
         );
       }
 
+      /*
+        The server tells us whether the evidence actually reached durable
+        storage. Until read-through, the browser copy is still written either
+        way — but the athlete must never be left believing their footage is
+        preserved when only this device holds it.
+      */
+      const durable = (data as VisionApiResponse & {
+        evidence?: { persisted?: boolean; failedAt?: string };
+      }).evidence;
+
+      if (durable && durable.persisted === false) {
+        pushSystemMessage(
+          "Saved on this device only — the copy on your account did not go through. " +
+            "Clearing this browser would lose it. Re-run the review when you have a connection."
+        );
+      }
+
       const normalized = normalizeVisionAnalysis(data.analysis, sport);
       const primaryFinding = ((data.analysis as any)?.findings || [])[0] || {};
       const modelOutput = validateVisionModelOutput({
