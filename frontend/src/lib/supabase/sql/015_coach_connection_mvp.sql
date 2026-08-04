@@ -2,6 +2,19 @@ begin;
 
 create extension if not exists pgcrypto;
 
+-- Organisations exist so records can be grouped by the programme they were
+-- created under. Deliberately minimal: no hierarchy, no membership, no
+-- policies. Those arrive with the federation model. Every historical row keeps
+-- a name snapshot alongside this reference, so the record still reads if the
+-- organisation is later removed.
+create table if not exists public.organisations (
+  id uuid primary key default gen_random_uuid(),
+  name text not null check (char_length(name) between 1 and 160),
+  created_at timestamptz not null default now()
+);
+
+alter table public.organisations enable row level security;
+
 create table if not exists public.coach_relationships (
   id uuid primary key default gen_random_uuid(),
   athlete_user_id uuid not null references auth.users(id) on delete cascade,
@@ -84,7 +97,9 @@ create index if not exists coach_invitations_relationship_created
 
 create table if not exists public.mission_submissions (
   id uuid primary key default gen_random_uuid(),
-  relationship_id uuid not null references public.coach_relationships(id) on delete cascade,
+  -- Historical. A submission records what was proposed, including proposals
+  -- that were declined, so it outlives the relationship it was made under.
+  relationship_id uuid references public.coach_relationships(id) on delete set null,
   athlete_user_id uuid not null references auth.users(id) on delete cascade,
   proposed_change_to_version_id uuid,
   correction_text text not null
@@ -109,9 +124,11 @@ create unique index if not exists mission_submissions_one_pending_per_relationsh
 
 create table if not exists public.mission_versions (
   id uuid primary key default gen_random_uuid(),
-  submission_id uuid not null unique
-    references public.mission_submissions(id) on delete cascade,
-  relationship_id uuid not null references public.coach_relationships(id) on delete cascade,
+  -- An approval is the record of a coach's decision. It must not disappear
+  -- because the submission or the relationship behind it was removed.
+  submission_id uuid unique
+    references public.mission_submissions(id) on delete set null,
+  relationship_id uuid references public.coach_relationships(id) on delete set null,
   athlete_user_id uuid not null references auth.users(id) on delete cascade,
   coach_user_id uuid references auth.users(id) on delete set null,
   coach_display_name text not null
@@ -123,6 +140,8 @@ create table if not exists public.mission_versions (
     check (char_length(practice_task) between 1 and 2000),
   athlete_context text
     check (athlete_context is null or char_length(athlete_context) <= 2000),
+  organisation_id uuid references public.organisations(id) on delete set null,
+  organisation_name_snapshot text,
   approval_kind text not null
     check (approval_kind in ('approved', 'edited_and_approved')),
   approved_at timestamptz not null default now(),
@@ -160,7 +179,9 @@ create trigger coach_relationships_deleted_coach_disconnect
 
 create table if not exists public.coach_audit_events (
   id uuid primary key default gen_random_uuid(),
-  relationship_id uuid references public.coach_relationships(id) on delete cascade,
+  -- The ledger outlives its subject. Deleting a relationship must never
+  -- erase the record of what happened inside it.
+  relationship_id uuid references public.coach_relationships(id) on delete set null,
   actor_user_id uuid references auth.users(id) on delete set null,
   actor_display_name text not null,
   actor_role text not null check (actor_role in ('athlete', 'coach')),
@@ -177,6 +198,8 @@ create table if not exists public.coach_audit_events (
       'mission_rejected',
       'relationship_disconnected'
     )),
+  organisation_id uuid references public.organisations(id) on delete set null,
+  organisation_name_snapshot text,
   entity_type text not null,
   entity_id uuid,
   metadata jsonb not null default '{}'::jsonb,
@@ -948,5 +971,22 @@ grant execute on function public.coach_decide_submission(uuid, text, text, text,
   to authenticated;
 grant execute on function public.coach_disconnect_relationship(uuid)
   to authenticated;
+
+-- The audit trail is a ledger: written once, never revised, never removed.
+create or replace function public.coach_audit_events_append_only()
+returns trigger
+language plpgsql
+as $
+begin
+  raise exception 'coach_audit_events is append-only';
+end;
+$;
+
+drop trigger if exists coach_audit_events_no_update on public.coach_audit_events;
+create trigger coach_audit_events_no_update
+  before update or delete on public.coach_audit_events
+  for each row execute function public.coach_audit_events_append_only();
+
+grant select on public.organisations to authenticated;
 
 commit;

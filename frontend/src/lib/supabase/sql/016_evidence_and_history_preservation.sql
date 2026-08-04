@@ -1,35 +1,18 @@
--- 016 — Durable evidence, and history that survives the people who made it.
+-- 016 — Durable evidence.
 --
--- Two problems this closes.
+-- Vision evidence lived in the athlete's browser. Clearing storage, changing
+-- phone, or signing in elsewhere lost the footage and everything observed in
+-- it, which left approvals nobody could audit.
 --
--- First: Vision evidence lives in the athlete's browser. Clearing storage,
--- changing phone, or signing in elsewhere loses the footage and everything
--- observed in it. An approval whose evidence has evaporated cannot be audited.
+-- Depends on 015 for public.organisations and public.coach_relationships.
+-- 015 is born with correct historical deletion rules, so nothing is retrofitted
+-- here.
 --
--- Second: mission_versions and coach_audit_events cascade from
--- coach_relationships. Disconnecting a coach deletes the athlete's approved
--- technical history and the audit trail describing it — the academy forgets a
--- fighter because a coach left.
---
--- The governing rule throughout: snapshot, do not reference. Every historical
--- row carries who acted, in what role, under which organisation, as it was at
--- the time. Foreign keys are conveniences that may go null; the snapshots are
--- the record.
+-- The governing rule: snapshot, do not reference. Every row carries who acted,
+-- in what role, under which organisation, as it was at the time. Foreign keys
+-- to people and organisations may go null; the snapshots are the record.
 
 begin;
-
--- ---------------------------------------------------------------------------
--- Organisations — a stable reference so records can be grouped, alongside the
--- name snapshot each record keeps. Deliberately minimal: no hierarchy, no
--- membership, no policies. Those arrive with the federation model, not here.
--- ---------------------------------------------------------------------------
-create table if not exists public.organisations (
-  id uuid primary key default gen_random_uuid(),
-  name text not null check (char_length(name) between 1 and 160),
-  created_at timestamptz not null default now()
-);
-
-alter table public.organisations enable row level security;
 
 -- ---------------------------------------------------------------------------
 -- Evidence assets — the file itself. One row per piece of footage, ever.
@@ -241,60 +224,7 @@ create policy evidence_observations_athlete_insert
 
 revoke all on public.evidence_assets from anon, authenticated;
 revoke all on public.evidence_observations from anon, authenticated;
-revoke all on public.organisations from anon, authenticated;
 grant select, insert on public.evidence_assets to authenticated;
 grant select, insert on public.evidence_observations to authenticated;
-grant select on public.organisations to authenticated;
-
--- ---------------------------------------------------------------------------
--- Stop history cascading away.
---
--- Disconnecting a coach must not delete the record of what they approved, nor
--- the audit trail describing it. The relationship link becomes a convenience
--- that may go null; the snapshots on each row carry the meaning.
---
--- Athlete-account deletion is deliberately left alone here: retaining coaching
--- records past an athlete's erasure is a legal question, not a technical one,
--- and is pending review.
--- ---------------------------------------------------------------------------
-alter table public.mission_versions
-  drop constraint if exists mission_versions_relationship_id_fkey;
-alter table public.mission_versions
-  alter column relationship_id drop not null;
-alter table public.mission_versions
-  add constraint mission_versions_relationship_id_fkey
-  foreign key (relationship_id) references public.coach_relationships(id)
-  on delete set null;
-
-alter table public.mission_versions
-  drop constraint if exists mission_versions_submission_id_fkey;
-alter table public.mission_versions
-  add constraint mission_versions_submission_id_fkey
-  foreign key (submission_id) references public.mission_submissions(id)
-  on delete set null;
-alter table public.mission_versions
-  alter column submission_id drop not null;
-
-alter table public.coach_audit_events
-  drop constraint if exists coach_audit_events_relationship_id_fkey;
-alter table public.coach_audit_events
-  add constraint coach_audit_events_relationship_id_fkey
-  foreign key (relationship_id) references public.coach_relationships(id)
-  on delete set null;
-
--- The audit trail is a ledger. It is never edited and never deleted.
-create or replace function public.coach_audit_events_append_only()
-returns trigger
-language plpgsql
-as $$
-begin
-  raise exception 'coach_audit_events is append-only';
-end;
-$$;
-
-drop trigger if exists coach_audit_events_no_update on public.coach_audit_events;
-create trigger coach_audit_events_no_update
-  before update or delete on public.coach_audit_events
-  for each row execute function public.coach_audit_events_append_only();
 
 commit;
