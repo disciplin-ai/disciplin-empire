@@ -103,9 +103,10 @@ for (const file of MIGRATION_CHAIN) {
   const path = resolve(SQL_DIR, file);
   console.log(`\n  Applying ${file} ...`);
 
+  const cli = resolve(HERE, "..", "node_modules", ".bin", "supabase");
   const run = spawnSync(
-    "npx",
-    ["--no-install", "supabase", "db", "push", "--db-url", dbUrl, "--include-all"],
+    cli,
+    ["db", "push", "--db-url", dbUrl, "--include-all"],
     { stdio: "inherit", shell: process.platform === "win32", input: readFileSync(path) }
   );
 
